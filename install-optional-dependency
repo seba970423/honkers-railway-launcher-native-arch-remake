@@ -1,0 +1,94 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+if ((EUID != 0)); then
+    printf 'This helper must be invoked through Polkit.\n' >&2
+    exit 1
+fi
+
+if (($# != 1)); then
+    printf 'Expected exactly one feature name.\n' >&2
+    exit 2
+fi
+
+case $1 in
+    gamemode)
+        packages=(gamemode lib32-gamemode)
+        ;;
+    system76-scheduler)
+        packages=(system76-scheduler)
+        ;;
+    system76-scheduler-repair)
+        config=/etc/system76-scheduler/config.kdl
+        distribution_config=/usr/share/system76-scheduler/config.kdl
+
+        [[ -r $config ]] || {
+            [[ -r $distribution_config ]] || {
+                printf 'System76 Scheduler configuration was not found.\n' >&2
+                exit 3
+            }
+            /usr/bin/install -Dm644 -- "$distribution_config" "$config"
+        }
+
+        backup=${config}.honkers-backup
+        [[ -e $backup ]] || /usr/bin/cp -a -- "$config" "$backup"
+
+        # Undo the short-lived r7-r9 workaround only when its backup proves
+        # that Honkers changed this setting from true to false.
+        if /usr/bin/grep -Eq '^[[:space:]]*execsnoop[[:space:]]+false([[:space:]]|$)' "$config" \
+            && /usr/bin/grep -Eq '^[[:space:]]*execsnoop[[:space:]]+true([[:space:]]|$)' "$backup"; then
+            /usr/bin/sed -Ei 's/^([[:space:]]*)execsnoop[[:space:]]+false([[:space:]]*)$/\1execsnoop true\2/' "$config"
+        fi
+
+        if /usr/bin/grep -Eq '^[[:space:]]*pipewire[[:space:]]+nice=' "$config"; then
+            /usr/bin/sed -Ei 's/^([[:space:]]*)pipewire([[:space:]]+nice=.*)$/\1\/\/ pipewire\2/' "$config"
+        fi
+
+        ! /usr/bin/grep -Eq '^[[:space:]]*pipewire[[:space:]]+nice=' "$config" \
+            && /usr/bin/grep -Eq '^[[:space:]]*//[[:space:]]*pipewire[[:space:]]+nice=' "$config" || {
+            printf 'Refusing to modify an unrecognized System76 Scheduler configuration.\n' >&2
+            exit 4
+        }
+
+        /usr/bin/systemctl restart com.system76.Scheduler.service
+        exit 0
+        ;;
+    system76-scheduler-restore)
+        config=/etc/system76-scheduler/config.kdl
+        backup=${config}.honkers-backup
+
+        [[ -f $backup && ! -L $backup ]] || {
+            printf 'No regular Honkers System76 Scheduler backup was found.\n' >&2
+            exit 3
+        }
+
+        /usr/bin/install -Dm644 -- "$backup" "$config"
+        /usr/bin/cmp -s -- "$backup" "$config" || {
+            printf 'System76 Scheduler configuration restoration could not be verified.\n' >&2
+            exit 4
+        }
+
+        if /usr/bin/pacman -Q system76-scheduler >/dev/null 2>&1; then
+            /usr/bin/systemctl restart com.system76.Scheduler.service || {
+                printf 'Configuration restored, but System76 Scheduler could not be restarted.\n' >&2
+                exit 5
+            }
+        fi
+
+        /usr/bin/rm -- "$backup"
+        exit 0
+        ;;
+    *)
+        printf 'Unsupported optional feature: %s\n' "$1" >&2
+        exit 2
+        ;;
+esac
+
+for package in "${packages[@]}"; do
+    /usr/bin/pacman -Si -- "$package" >/dev/null 2>&1 || {
+        printf 'Package is unavailable from configured repositories: %s\n' "$package" >&2
+        exit 3
+    }
+done
+
+exec /usr/bin/pacman --noconfirm -S --needed -- "${packages[@]}"

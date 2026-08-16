@@ -1,0 +1,302 @@
+From f3076b6610d8f3359cf4a5c17b60d05abd344625 Mon Sep 17 00:00:00 2001
+From: Arch Enhancements <noreply@example.invalid>
+Date: Sat, 15 Aug 2026 22:56:20 +0300
+Subject: [PATCH] star-rail: add sync resolution and scheduler integration
+
+---
+ src/config/schema_blanks/wine/mod.rs          |  10 +-
+ src/config/schema_blanks/wine/wine_sync.rs    |  10 +-
+ .../config/schema/game/enhancements.rs        |   5 +
+ src/games/star_rail/config/schema/game/mod.rs |  18 ++-
+ src/games/star_rail/game.rs                   | 111 ++++++++++++++++--
+ 5 files changed, 137 insertions(+), 17 deletions(-)
+
+diff --git a/src/config/schema_blanks/wine/mod.rs b/src/config/schema_blanks/wine/mod.rs
+index cf4cc70..db194c6 100644
+--- a/src/config/schema_blanks/wine/mod.rs
++++ b/src/config/schema_blanks/wine/mod.rs
+@@ -28,7 +28,8 @@ macro_rules! config_impl_wine_schema {
+             pub virtual_desktop: VirtualDesktop,
+             pub shared_libraries: SharedLibraries,
+             pub timeout_fix: bool,
+-            pub winewayland: bool
++            pub winewayland: bool,
++            pub wined3d: bool
+         }
+ 
+         impl Default for Wine {
+@@ -47,7 +48,8 @@ macro_rules! config_impl_wine_schema {
+                     virtual_desktop: VirtualDesktop::default(),
+                     shared_libraries: SharedLibraries::default(),
+                     timeout_fix: false,
+-                    winewayland: false
++                    winewayland: false,
++                    wined3d: false
+                 }
+             }
+         }
+@@ -112,6 +114,10 @@ macro_rules! config_impl_wine_schema {
+                     winewayland: value.get("winewayland")
+                         .and_then(|value| value.as_bool())
+                         .unwrap_or(default.winewayland),
++
++                    wined3d: value.get("wined3d")
++                        .and_then(|value| value.as_bool())
++                        .unwrap_or(default.wined3d),
+                 }
+             }
+         }
+diff --git a/src/config/schema_blanks/wine/wine_sync.rs b/src/config/schema_blanks/wine/wine_sync.rs
+index 9fabb78..76c5f88 100644
+--- a/src/config/schema_blanks/wine/wine_sync.rs
++++ b/src/config/schema_blanks/wine/wine_sync.rs
+@@ -7,15 +7,17 @@ use enum_ordinalize::Ordinalize;
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Ordinalize, Serialize, Deserialize)]
+ pub enum WineSync {
+-    None,
++    Auto,
++    NTSync,
++    FSync,
+     ESync,
+-    FSync
++    None,
+ }
+ 
+ impl Default for WineSync {
+     #[inline]
+     fn default() -> Self {
+-        Self::FSync
++        Self::Auto
+     }
+ }
+ 
+@@ -30,7 +32,7 @@ impl WineSync {
+     /// Get environment variables corresponding to used wine sync
+     pub fn get_env_vars(&self) -> HashMap<&str, &str> {
+         let key = match self {
+-            Self::None => return HashMap::new(),
++            Self::Auto | Self::NTSync | Self::None => return HashMap::new(),
+ 
+             Self::ESync => "WINEESYNC",
+             Self::FSync => "WINEFSYNC"
+diff --git a/src/games/star_rail/config/schema/game/enhancements.rs b/src/games/star_rail/config/schema/game/enhancements.rs
+index 06a619d..369550d 100644
+--- a/src/games/star_rail/config/schema/game/enhancements.rs
++++ b/src/games/star_rail/config/schema/game/enhancements.rs
+@@ -7,6 +7,7 @@ use crate::config::schema_blanks::prelude::*;
+ pub struct Enhancements {
+     pub fsr: Fsr,
+     pub gamemode: bool,
++    pub system76_scheduler: bool,
+     pub hud: HUD,
+     pub gamescope: Gamescope
+ }
+@@ -24,6 +25,10 @@ impl From<&JsonValue> for Enhancements {
+                 .and_then(JsonValue::as_bool)
+                 .unwrap_or(default.gamemode),
+ 
++            system76_scheduler: value.get("system76_scheduler")
++                .and_then(JsonValue::as_bool)
++                .unwrap_or(default.system76_scheduler),
++
+             hud: value.get("hud")
+                 .map(HUD::from)
+                 .unwrap_or(default.hud),
+diff --git a/src/games/star_rail/config/schema/game/mod.rs b/src/games/star_rail/config/schema/game/mod.rs
+index 4385227..960ade4 100644
+--- a/src/games/star_rail/config/schema/game/mod.rs
++++ b/src/games/star_rail/config/schema/game/mod.rs
+@@ -78,9 +78,21 @@ impl From<&JsonValue> for Game {
+                 None => default.voices
+             },
+ 
+-            wine: value.get("wine")
+-                .map(Wine::from)
+-                .unwrap_or(default.wine),
++            wine: {
++                let mut wine = value.get("wine")
++                    .map(Wine::from)
++                    .unwrap_or(default.wine);
++
++                // Migrate the short-lived Arch enhancements r2 location.
++                if value.get("wine").and_then(|wine| wine.get("wined3d")).is_none() {
++                    wine.wined3d = value.get("enhancements")
++                        .and_then(|enhancements| enhancements.get("wined3d"))
++                        .and_then(JsonValue::as_bool)
++                        .unwrap_or(false);
++                }
++
++                wine
++            },
+ 
+             dxvk: value.get("dxvk")
+                 .map(Dxvk::from)
+diff --git a/src/games/star_rail/game.rs b/src/games/star_rail/game.rs
+index 0721f93..021691c 100644
+--- a/src/games/star_rail/game.rs
++++ b/src/games/star_rail/game.rs
+@@ -12,7 +12,8 @@ use crate::star_rail::config::Config;
+ 
+ use crate::config::schema_blanks::prelude::{
+     WineDrives,
+-    AllowedDrives
++    AllowedDrives,
++    WineSync
+ };
+ 
+ use crate::star_rail::consts;
+@@ -32,6 +33,35 @@ struct Folders {
+     pub temp: PathBuf
+ }
+ 
++fn wine_supports_ntsync(wine: &std::path::Path) -> bool {
++    let Ok(output) = Command::new(wine).arg("--version").output() else {
++        return false;
++    };
++
++    let version = String::from_utf8_lossy(&output.stdout);
++    version
++        .split(|c: char| !c.is_ascii_digit())
++        .find(|part| !part.is_empty())
++        .and_then(|major| major.parse::<u32>().ok())
++        .is_some_and(|major| major >= 11)
++}
++
++fn ntsync_available(wine: &std::path::Path) -> bool {
++    wine_supports_ntsync(wine) && File::open("/dev/ntsync").is_ok()
++}
++
++/// Whether the currently selected Wine build and kernel can use upstream NTSYNC.
++pub fn is_ntsync_available() -> bool {
++    let Ok(config) = Config::get() else {
++        return false;
++    };
++    let Ok(Some(wine)) = config.get_selected_wine() else {
++        return false;
++    };
++    let wine_file = wine.files.wine64.clone().unwrap_or(wine.files.wine.clone());
++    ntsync_available(&config.game.wine.builds.join(&wine.name).join(wine_file))
++}
++
+ fn replace_keywords(command: impl ToString, folders: &Folders) -> String {
+     command.to_string()
+         .replace("%build%", folders.wine.to_str().unwrap())
+@@ -107,9 +137,34 @@ pub fn run() -> anyhow::Result<()> {
+         bash_command += "gamemoderun ";
+     }
+ 
++    if config.game.wine.wined3d
++        && config.game.enhancements.hud == crate::config::schema_blanks::hud::HUD::MangoHUD
++        && !config.game.enhancements.gamescope.enabled
++    {
++        bash_command += "mangohud --dlsym ";
++    }
++
++    let wine_binary = folders.wine.join(wine.files.wine64.unwrap_or(wine.files.wine));
++
++    match config.game.wine.sync {
++        WineSync::Auto => tracing::info!(
++            "Synchronization: Auto -> {}",
++            if ntsync_available(&wine_binary) { "NTSYNC" } else { "Wine fallback" }
++        ),
++        WineSync::NTSync if ntsync_available(&wine_binary) => {
++            tracing::info!("Synchronization: Prefer NTSYNC -> NTSYNC")
++        }
++        WineSync::NTSync => tracing::warn!(
++            "Synchronization: Prefer NTSYNC unavailable; Auto will be used"
++        ),
++        WineSync::FSync => tracing::info!("Synchronization: FSYNC"),
++        WineSync::ESync => tracing::info!("Synchronization: ESYNC"),
++        WineSync::None => tracing::info!("Synchronization: Wine default"),
++    }
++
+     let run_command = features.command
+         .map(|command| replace_keywords(command, &folders))
+-        .unwrap_or(format!("'{}'", folders.wine.join(wine.files.wine64.unwrap_or(wine.files.wine)).to_string_lossy()));
++        .unwrap_or(format!("'{}'", wine_binary.to_string_lossy()));
+ 
+     bash_command += &run_command;
+     bash_command += " ";
+@@ -200,18 +255,22 @@ pub fn run() -> anyhow::Result<()> {
+         command.env(key, replace_keywords(value, &folders));
+     }
+ 
+-    // Add environment flags for selected dxvk
+-    if let Ok(Some(dxvk)) = config.get_selected_dxvk() {
+-        if let Ok(Some(features)) = dxvk.features(&config.components.path) {
+-            for (key, value) in features.env.iter() {
+-                command.env(key, replace_keywords(value, &folders));
++    // Add environment flags for selected DXVK unless WineD3D was explicitly requested.
++    if !config.game.wine.wined3d {
++        if let Ok(Some(dxvk)) = config.get_selected_dxvk() {
++            if let Ok(Some(features)) = dxvk.features(&config.components.path) {
++                for (key, value) in features.env.iter() {
++                    command.env(key, replace_keywords(value, &folders));
++                }
+             }
+         }
+     }
+ 
+     let wine_folder = folders.wine.clone();
+ 
+-    command.envs(config.game.enhancements.hud.get_env_vars(config.game.enhancements.gamescope.enabled));
++    if !config.game.wine.wined3d {
++        command.envs(config.game.enhancements.hud.get_env_vars(config.game.enhancements.gamescope.enabled));
++    }
+     command.envs(config.game.enhancements.fsr.get_env_vars());
+ 
+     command.envs(config.game.wine.sync.get_env_vars());
+@@ -224,6 +283,15 @@ pub fn run() -> anyhow::Result<()> {
+ 
+     command.envs(&config.game.environment);
+ 
++    if config.game.wine.wined3d {
++        // Keep the installed DXVK version intact, but override it for this launch only.
++        // Environment overrides take precedence over the native registry overrides DXVK uses.
++        command.env("WINEDLLOVERRIDES", "dxgi,d3d11,d3d10core,d3d10,d3d9=b");
++        tracing::info!("Graphics backend: WineD3D (experimental)");
++    } else {
++        tracing::info!("Graphics backend: DXVK");
++    }
++
+     #[cfg(feature = "sessions")]
+     if let Some(current) = Sessions::get_current()? {
+         Sessions::apply(current, &config.game.wine.prefix)?;
+@@ -245,6 +313,34 @@ pub fn run() -> anyhow::Result<()> {
+         .stderr(Stdio::piped())
+         .spawn()?;
+ 
++    if config.game.enhancements.system76_scheduler {
++        let pid = child.id().to_string();
++        std::thread::spawn(move || match Command::new("busctl")
++            .args([
++                "--timeout=2s",
++                "call",
++                "--system",
++                "com.system76.Scheduler",
++                "/com/system76/Scheduler",
++                "com.system76.Scheduler",
++                "SetForegroundProcess",
++                "u",
++                &pid,
++            ])
++            .status()
++        {
++            Ok(status) if status.success() => {
++                tracing::info!("System76 Scheduler: foreground PID {pid} assigned")
++            }
++            Ok(status) => tracing::warn!(
++                "System76 Scheduler unavailable (busctl exited with {status}); game launch continues"
++            ),
++            Err(err) => tracing::warn!(
++                "System76 Scheduler unavailable ({err}); game launch continues"
++            ),
++        });
++    }
++
+     // Create new game.log file to log all the game output
+     let game_output = Arc::new(Mutex::new(
+         File::create(consts::launcher_dir()?.join("game.log"))?
+-- 
+2.51.1

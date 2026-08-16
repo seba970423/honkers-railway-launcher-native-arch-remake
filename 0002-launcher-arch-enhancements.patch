@@ -1,0 +1,507 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index e130a75..4325aa6 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -84,7 +84,6 @@ dependencies = [
+ [[package]]
+ name = "anime-launcher-sdk"
+ version = "1.35.12"
+-source = "git+https://github.com/an-anime-team/anime-launcher-sdk?tag=1.35.12#4b9cb6efb04bacec57747e19e7277086d201562e"
+ dependencies = [
+  "anime-game-core",
+  "anyhow",
+diff --git a/Cargo.toml b/Cargo.toml
+index 6b3e778..8f137a9 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -22,8 +22,7 @@ opt-level = "s"
+ glib-build-tools = "0.20"
+ 
+ [dependencies.anime-launcher-sdk]
+-git = "https://github.com/an-anime-team/anime-launcher-sdk"
+-tag = "1.35.12"
++path = "../anime-launcher-sdk"
+ features = ["all", "star-rail", "star-rail-patch"]
+ 
+ # path = "../anime-launcher-sdk" # ! for dev purposes only
+diff --git a/assets/locales/en/components.ftl b/assets/locales/en/components.ftl
+index 9c945b2..379e24b 100644
+--- a/assets/locales/en/components.ftl
++++ b/assets/locales/en/components.ftl
+@@ -15,6 +15,9 @@ wine-use-shared-libraries-description = Set LD_LIBRARY_PATH variable to load sys
+ gstreamer-use-shared-libraries = Use gstreamer shared libraries
+ gstreamer-use-shared-libraries-description = Set GST_PLUGIN_PATH variable to load gstreamer libraries from selected wine build
+ 
++wined3d = WineD3D (experimental)
++wined3d-description = Use Wine's OpenGL renderer instead of DXVK; MangoHud uses OpenGL injection
++
+ dxvk-version = DXVK version
+ dxvk-selection-disabled = DXVK selection is disabled by your wine group preferences
+ dxvk-recommended-description = Show only recommended dxvk versions
+diff --git a/assets/locales/en/enhancements.ftl b/assets/locales/en/enhancements.ftl
+index 2bd5eaa..6cbe90f 100644
+--- a/assets/locales/en/enhancements.ftl
++++ b/assets/locales/en/enhancements.ftl
+@@ -33,6 +33,31 @@ performance = Performance
+ 
+ gamemode = Gamemode
+ gamemode-description = Prioritize the game over the rest of the processes
++gamemode-available = Available — prioritize the game process
++gamemode-unavailable = Unavailable — enable to install it
++gamemode-install-title = Install GameMode?
++gamemode-install-description = Pacman will install GameMode and its 32-bit runtime support. The launcher itself will not be elevated.
++
++system76-scheduler = System76 Scheduler
++system76-scheduler-available = Available — assign the game through D-Bus
++system76-scheduler-unavailable = Unavailable — enable to install it
++system76-scheduler-install-title = Install System76 Scheduler?
++system76-scheduler-install-description = Pacman will install System76 Scheduler. Runtime process assignment continues to use D-Bus directly.
++system76-scheduler-unresponsive = Installed, but its D-Bus service is unresponsive
++system76-scheduler-pipewire-enabled = Installed, but the crashing scheduler PipeWire monitor is enabled
++system76-scheduler-repair-title = Repair System76 Scheduler?
++system76-scheduler-repair-description = Only System76 Scheduler's crashing PipeWire process monitor will be disabled and its service restarted. System audio, execsnoop, and foreground assignment over D-Bus remain enabled.
++system76-scheduler-repaired = System76 Scheduler repaired and enabled
++system76-scheduler-repair-failed = System76 Scheduler remains unavailable
++
++optional-dependency-installed = Optional dependency installed and enabled
++optional-dependency-install-failed = Installation was cancelled or failed
++optional-dependency-install-button = Install
++optional-dependency-cancel-button = Cancel
++
++ntsync-available = NTSYNC is available for the selected Wine build
++ntsync-unavailable-auto = Prefer NTSYNC — unavailable; Auto will be used
++
+ 
+ gamescope = Gamescope
+ gamescope-description = Gamescope is a tool from Valve that allows for games to run in an isolated Xwayland instance and supports AMD, Intel, and Nvidia GPUs
+diff --git a/src/ui/about.rs b/src/ui/about.rs
+index ee15d79..4dc26f6 100644
+--- a/src/ui/about.rs
++++ b/src/ui/about.rs
+@@ -8,7 +8,7 @@ lazy_static::lazy_static! {
+     pub static ref APP_VERSION: String = if crate::APP_DEBUG && !crate::APP_VERSION.contains('-') {
+         format!("{}-dev", crate::APP_VERSION)
+     } else {
+-        crate::APP_VERSION.to_string()
++        format!("{} + Arch enhancements r11", crate::APP_VERSION)
+     };
+ }
+ 
+diff --git a/src/ui/preferences/enhancements/mod.rs b/src/ui/preferences/enhancements/mod.rs
+index 3f1afb4..670607c 100644
+--- a/src/ui/preferences/enhancements/mod.rs
++++ b/src/ui/preferences/enhancements/mod.rs
+@@ -22,10 +22,14 @@ pub struct EnhancementsApp {
+     gamescope: AsyncController<GamescopeApp>,
+     game_page: AsyncController<GamePage>,
+     sandbox_page: AsyncController<SandboxPage>,
+-    environment_page: AsyncController<EnvironmentPage>
++    environment_page: AsyncController<EnvironmentPage>,
++    gamemode_enabled: bool,
++    system76_scheduler_enabled: bool,
++    gamemode_available: bool,
++    system76_scheduler_available: bool,
+ }
+ 
+-#[derive(Debug)]
++#[derive(Debug, Clone)]
+ pub enum EnhancementsAppMsg {
+     SetGamescopeParent,
+     OpenGamescope,
+@@ -33,6 +37,14 @@ pub enum EnhancementsAppMsg {
+     OpenGameSettingsPage,
+     OpenSandboxSettingsPage,
+     OpenEnvironmentSettingsPage,
++    SetGamemode(bool),
++    SetSystem76Scheduler(bool),
++    InstallGamemode,
++    InstallSystem76Scheduler,
++    RepairSystem76Scheduler,
++    GamemodeInstallFinished(bool),
++    System76SchedulerInstallFinished(bool),
++    System76SchedulerRepairFinished(bool),
+ 
+     Toast {
+         title: String,
+@@ -100,13 +110,19 @@ impl SimpleAsyncComponent for EnhancementsApp {
+ 
+                 adw::ComboRow {
+                     set_title: &tr!("synchronization"),
+-                    set_subtitle: &tr!("wine-sync-description"),
++                    set_subtitle: &if anime_launcher_sdk::star_rail::game::is_ntsync_available() {
++                        tr!("ntsync-available")
++                    } else {
++                        tr!("ntsync-unavailable-auto")
++                    },
+ 
+                     #[wrap(Some)]
+                     set_model = &gtk::StringList::new(&[
+-                        &tr!("none"),
++                        "Auto",
++                        "Prefer NTSYNC",
++                        "FSync",
+                         "ESync",
+-                        "FSync"
++                        "Wine default"
+                     ]),
+ 
+                     set_selected: CONFIG.game.wine.sync.ordinal() as u32,
+@@ -114,7 +130,15 @@ impl SimpleAsyncComponent for EnhancementsApp {
+                     connect_selected_notify => |row| unsafe {
+                         if is_ready() {
+                             if let Ok(mut config) = Config::get() {
+-                                config.game.wine.sync = WineSync::from_ordinal_unsafe(row.selected() as i8);
++                                let selected = WineSync::from_ordinal_unsafe(row.selected() as i8);
++                                config.game.wine.sync = if selected == WineSync::NTSync
++                                    && !anime_launcher_sdk::star_rail::game::is_ntsync_available()
++                                {
++                                    row.set_selected(WineSync::Auto.ordinal() as u32);
++                                    WineSync::Auto
++                                } else {
++                                    selected
++                                };
+ 
+                                 Config::update(config);
+                             }
+@@ -382,24 +406,52 @@ impl SimpleAsyncComponent for EnhancementsApp {
+                     }
+                 },
+ 
++                #[name = "gamemode_row"]
+                 adw::ActionRow {
+                     set_title: &tr!("gamemode"),
+-                    set_subtitle: &tr!("gamemode-description"),
+-
+-                    set_sensitive: is_available("gamemoderun"),
++                    #[track = "model.gamemode_available"]
++                    set_subtitle: &if model.gamemode_available {
++                        tr!("gamemode-available")
++                    } else {
++                        tr!("gamemode-unavailable")
++                    },
+ 
+                     add_suffix = &gtk::Switch {
+                         set_valign: gtk::Align::Center,
+ 
+-                        set_active: CONFIG.game.enhancements.gamemode,
+-
+-                        connect_state_notify => |switch| {
++                        #[track = "model.gamemode_enabled"]
++                        set_active: model.gamemode_enabled,
++                        connect_state_notify[sender] => move |switch| {
+                             if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    config.game.enhancements.gamemode = switch.is_active();
++                                sender.input(EnhancementsAppMsg::SetGamemode(switch.is_active()));
++                            }
++                        }
++                    }
++                },
+ 
+-                                    Config::update(config);
+-                                }
++                #[name = "system76_scheduler_row"]
++                adw::ActionRow {
++                    set_title: &tr!("system76-scheduler"),
++                    #[track = "model.system76_scheduler_available"]
++                    set_subtitle: &if model.system76_scheduler_available {
++                        if is_system76_scheduler_pipewire_monitor_enabled() {
++                            tr!("system76-scheduler-pipewire-enabled")
++                        } else if is_system76_scheduler_responsive() {
++                            tr!("system76-scheduler-available")
++                        } else {
++                            tr!("system76-scheduler-unresponsive")
++                        }
++                    } else {
++                        tr!("system76-scheduler-unavailable")
++                    },
++
++                    add_suffix = &gtk::Switch {
++                        set_valign: gtk::Align::Center,
++                        #[track = "model.system76_scheduler_enabled"]
++                        set_active: model.system76_scheduler_enabled,
++                        connect_state_notify[sender] => move |switch| {
++                            if is_ready() {
++                                sender.input(EnhancementsAppMsg::SetSystem76Scheduler(switch.is_active()));
+                             }
+                         }
+                     }
+@@ -469,13 +515,26 @@ impl SimpleAsyncComponent for EnhancementsApp {
+ 
+             environment_page: EnvironmentPage::builder()
+                 .launch(())
+-                .forward(sender.input_sender(), std::convert::identity)
++                .forward(sender.input_sender(), std::convert::identity),
++
++            gamemode_enabled: CONFIG.game.enhancements.gamemode && is_available("gamemoderun"),
++            system76_scheduler_enabled: CONFIG.game.enhancements.system76_scheduler
++                && is_available("system76-scheduler")
++                && !is_system76_scheduler_pipewire_monitor_enabled()
++                && is_system76_scheduler_responsive(),
++            gamemode_available: is_available("gamemoderun"),
++            system76_scheduler_available: is_available("system76-scheduler"),
+         };
+ 
+         let game_page = model.game_page.widget();
+         let sandbox_page = model.sandbox_page.widget();
+         let environment_page = model.environment_page.widget();
+ 
++        update_optional_preferences(
++            model.gamemode_enabled,
++            model.system76_scheduler_enabled,
++        );
++
+         let widgets = view_output!();
+ 
+         if !is_wayland_available() {
+@@ -534,6 +591,142 @@ impl SimpleAsyncComponent for EnhancementsApp {
+                     .push_subpage(self.environment_page.widget());
+             },
+ 
++            EnhancementsAppMsg::SetGamemode(enabled) => {
++                if enabled && !is_available("gamemoderun") {
++                    self.gamemode_enabled = false;
++                    show_optional_install_dialog(
++                        &tr!("gamemode-install-title"),
++                        &tr!("gamemode-install-description"),
++                        EnhancementsAppMsg::InstallGamemode,
++                        sender.input_sender().clone(),
++                    );
++                } else {
++                    self.gamemode_enabled = enabled;
++                    update_optional_preferences(self.gamemode_enabled, self.system76_scheduler_enabled);
++                }
++            },
++
++            EnhancementsAppMsg::SetSystem76Scheduler(enabled) => {
++                if enabled && !is_available("system76-scheduler") {
++                    self.system76_scheduler_enabled = false;
++                    show_optional_install_dialog(
++                        &tr!("system76-scheduler-install-title"),
++                        &tr!("system76-scheduler-install-description"),
++                        EnhancementsAppMsg::InstallSystem76Scheduler,
++                        sender.input_sender().clone(),
++                    );
++                } else if enabled && is_system76_scheduler_pipewire_monitor_enabled() {
++                    self.system76_scheduler_enabled = false;
++                    show_optional_install_dialog(
++                        &tr!("system76-scheduler-repair-title"),
++                        &tr!("system76-scheduler-repair-description"),
++                        EnhancementsAppMsg::RepairSystem76Scheduler,
++                        sender.input_sender().clone(),
++                    );
++                } else if enabled && !is_system76_scheduler_responsive() {
++                    self.system76_scheduler_enabled = false;
++                    sender.output(PreferencesAppMsg::Toast {
++                        title: tr!("system76-scheduler-repair-failed"),
++                        description: None,
++                    }).unwrap();
++                } else {
++                    self.system76_scheduler_enabled = enabled;
++                    update_optional_preferences(self.gamemode_enabled, self.system76_scheduler_enabled);
++                }
++            },
++
++            EnhancementsAppMsg::InstallGamemode => {
++                let sender = sender.clone();
++                std::thread::spawn(move || {
++                    sender.input(EnhancementsAppMsg::GamemodeInstallFinished(
++                        run_optional_dependency_helper("gamemode")
++                    ));
++                });
++            },
++
++            EnhancementsAppMsg::GamemodeInstallFinished(installed) => {
++                self.gamemode_available = installed && is_available("gamemoderun");
++                self.gamemode_enabled = self.gamemode_available;
++                update_optional_preferences(self.gamemode_enabled, self.system76_scheduler_enabled);
++                sender.output(PreferencesAppMsg::Toast {
++                    title: if self.gamemode_enabled {
++                        tr!("optional-dependency-installed")
++                    } else {
++                        tr!("optional-dependency-install-failed")
++                    },
++                    description: None,
++                }).unwrap();
++            },
++
++            EnhancementsAppMsg::InstallSystem76Scheduler => {
++                let sender = sender.clone();
++                std::thread::spawn(move || {
++                    sender.input(EnhancementsAppMsg::System76SchedulerInstallFinished(
++                        run_optional_dependency_helper("system76-scheduler")
++                    ));
++                });
++            },
++
++            EnhancementsAppMsg::System76SchedulerInstallFinished(_helper_succeeded) => {
++                // Pacman may have installed the package even when the freshly started
++                // service exits before the privileged helper returns. Treat package
++                // presence and service readiness as separate stages: a known PipeWire
++                // incompatibility requires repair, not an installation-failure toast.
++                self.system76_scheduler_available = is_available("system76-scheduler");
++                self.system76_scheduler_enabled = false;
++                update_optional_preferences(self.gamemode_enabled, false);
++
++                if self.system76_scheduler_available
++                    && is_system76_scheduler_pipewire_monitor_enabled()
++                {
++                    show_optional_install_dialog(
++                        &tr!("system76-scheduler-repair-title"),
++                        &tr!("system76-scheduler-repair-description"),
++                        EnhancementsAppMsg::RepairSystem76Scheduler,
++                        sender.input_sender().clone(),
++                    );
++                } else {
++                    self.system76_scheduler_enabled = self.system76_scheduler_available
++                        && is_system76_scheduler_responsive();
++                    update_optional_preferences(
++                        self.gamemode_enabled,
++                        self.system76_scheduler_enabled,
++                    );
++                    sender.output(PreferencesAppMsg::Toast {
++                        title: if self.system76_scheduler_enabled {
++                            tr!("optional-dependency-installed")
++                        } else {
++                            tr!("optional-dependency-install-failed")
++                        },
++                        description: None,
++                    }).unwrap();
++                }
++            },
++
++            EnhancementsAppMsg::RepairSystem76Scheduler => {
++                let sender = sender.clone();
++                std::thread::spawn(move || {
++                    sender.input(EnhancementsAppMsg::System76SchedulerRepairFinished(
++                        run_optional_dependency_helper("system76-scheduler-repair")
++                            && is_system76_scheduler_responsive()
++                    ));
++                });
++            },
++
++            EnhancementsAppMsg::System76SchedulerRepairFinished(repaired) => {
++                self.system76_scheduler_available = is_available("system76-scheduler");
++                self.system76_scheduler_enabled = repaired;
++                update_optional_preferences(self.gamemode_enabled, self.system76_scheduler_enabled);
++                sender.output(PreferencesAppMsg::Toast {
++                    title: if repaired {
++                        tr!("system76-scheduler-repaired")
++                    } else {
++                        tr!("system76-scheduler-repair-failed")
++                    },
++                    description: None,
++                }).unwrap();
++            },
++
+             EnhancementsAppMsg::Toast {
+                 title,
+                 description
+@@ -548,3 +692,77 @@ impl SimpleAsyncComponent for EnhancementsApp {
+         }
+     }
+ }
++
++fn update_optional_preferences(gamemode: bool, system76_scheduler: bool) {
++    if let Ok(mut config) = Config::get() {
++        config.game.enhancements.gamemode = gamemode;
++        config.game.enhancements.system76_scheduler = system76_scheduler;
++        Config::update(config);
++    }
++}
++
++fn show_optional_install_dialog(
++    title: &str,
++    description: &str,
++    install_message: EnhancementsAppMsg,
++    sender: relm4::Sender<EnhancementsAppMsg>,
++) {
++    let parent = relm4::main_application().active_window();
++    let dialog = adw::MessageDialog::new(
++        parent.as_ref(),
++        Some(title),
++        Some(description),
++    );
++    dialog.add_responses(&[
++        ("cancel", &tr!("optional-dependency-cancel-button")),
++        ("install", &tr!("optional-dependency-install-button")),
++    ]);
++    dialog.set_default_response(Some("install"));
++    dialog.set_close_response("cancel");
++    dialog.set_response_appearance("install", adw::ResponseAppearance::Suggested);
++    dialog.connect_response(Some("install"), move |_, _| {
++        let _ = sender.send(install_message.clone());
++    });
++    dialog.present();
++}
++
++fn run_optional_dependency_helper(feature: &str) -> bool {
++    std::process::Command::new("pkexec")
++        .arg("/usr/lib/honkers-railway-launcher/install-optional-dependency")
++        .arg(feature)
++        .status()
++        .map(|status| status.success())
++        .unwrap_or(false)
++}
++
++fn is_system76_scheduler_responsive() -> bool {
++    std::process::Command::new("busctl")
++        .args([
++            "--timeout=2s",
++            "introspect",
++            "--system",
++            "com.system76.Scheduler",
++            "/com/system76/Scheduler",
++        ])
++        .stdout(std::process::Stdio::null())
++        .stderr(std::process::Stdio::null())
++        .status()
++        .map(|status| status.success())
++        .unwrap_or(false)
++}
++
++fn is_system76_scheduler_pipewire_monitor_enabled() -> bool {
++    [
++        "/etc/system76-scheduler/config.kdl",
++        "/usr/share/system76-scheduler/config.kdl",
++    ]
++    .iter()
++    .find_map(|path| std::fs::read_to_string(path).ok())
++    .map(|config| {
++        config.lines().any(|line| {
++            let setting = line.split("//").next().unwrap_or("").trim();
++            setting.starts_with("pipewire ") && setting.contains("nice=")
++        })
++    })
++    .unwrap_or(false)
++}
+diff --git a/src/ui/preferences/general/components.rs b/src/ui/preferences/general/components.rs
+index 10670a2..dc5ad89 100644
+--- a/src/ui/preferences/general/components.rs
++++ b/src/ui/preferences/general/components.rs
+@@ -156,6 +156,25 @@ impl SimpleAsyncComponent for ComponentsPage {
+                                     }
+                                 } @gstreamer_shared_libraries_notify
+                             }
++                        },
++
++                        adw::ActionRow {
++                            set_title: &tr!("wined3d"),
++                            set_subtitle: &tr!("wined3d-description"),
++
++                            add_suffix = &gtk::Switch {
++                                set_valign: gtk::Align::Center,
++                                set_active: CONFIG.game.wine.wined3d,
++
++                                connect_state_notify => |switch| {
++                                    if is_ready() {
++                                        if let Ok(mut config) = Config::get() {
++                                            config.game.wine.wined3d = switch.is_active();
++                                            Config::update(config);
++                                        }
++                                    }
++                                }
++                            }
+                         }
+                     },
+ 
