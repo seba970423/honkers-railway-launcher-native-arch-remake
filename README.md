@@ -41,9 +41,9 @@ Runtime foreground assignment uses System76 Scheduler's existing D-Bus interface
 
 ## Install
 
-Run from the extracted project directory:
-
 ```bash
+git clone https://github.com/seba970423/honkers-railway-launcher-native-arch-remake.git
+cd honkers-railway-launcher-native-arch-remake
 ./install.sh
 ```
 
