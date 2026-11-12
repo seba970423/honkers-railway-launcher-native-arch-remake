@@ -1,0 +1,44 @@
+name: Gamescope settings build check
+on:
+  push:
+    branches: [gamescope-support]
+    paths: ['.github/workflows/gamescope-build-check.yml']
+permissions:
+  contents: read
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 18
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - name: Install Arch build dependencies
+        shell: bash
+        run: pacman -Syu --noconfirm --needed git rust gtk4 libadwaita openssl curl
+      - uses: actions/checkout@v4
+      - name: Apply pinned patches and run Gamescope tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./PKGBUILD
+          srcdir=$(mktemp -d)
+          for index in "${!source[@]}"; do
+            entry=${source[index]}
+            if [[ $entry == *::* ]]; then
+              file=${entry%%::*}
+              curl --fail --location --retry 2 --output "$srcdir/$file" "${entry#*::}"
+            else
+              file=$entry
+              cp -p -- "$file" "$srcdir/"
+            fi
+            printf '%s  %s\n' "${sha256sums[index]}" "$srcdir/$file" | sha256sum --check --strict
+            if [[ $entry == *::* ]]; then
+              tar -xf "$srcdir/$file" -C "$srcdir"
+            fi
+          done
+          prepare
+          cd "$srcdir/the-honkers-railway-launcher-$pkgver"
+          cargo test --frozen --all-features ui::preferences::gamescope::tests -- --nocapture
