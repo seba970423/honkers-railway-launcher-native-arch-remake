@@ -39,10 +39,10 @@ index 9c945b2..379e24b 100644
  dxvk-selection-disabled = DXVK selection is disabled by your wine group preferences
  dxvk-recommended-description = Show only recommended dxvk versions
 diff --git a/assets/locales/en/enhancements.ftl b/assets/locales/en/enhancements.ftl
-index 2bd5eaa..6cbe90f 100644
+index 2bd5eaa..7f88d16 100644
 --- a/assets/locales/en/enhancements.ftl
 +++ b/assets/locales/en/enhancements.ftl
-@@ -33,6 +33,31 @@ performance = Performance
+@@ -33,9 +33,38 @@ performance = Performance
  
  gamemode = Gamemode
  gamemode-description = Prioritize the game over the rest of the processes
@@ -73,9 +73,17 @@ index 2bd5eaa..6cbe90f 100644
 +
  
  gamescope = Gamescope
- gamescope-description = Gamescope is a tool from Valve that allows for games to run in an isolated Xwayland instance and supports AMD, Intel, and Nvidia GPUs
+-gamescope-description = Gamescope is a tool from Valve that allows for games to run in an isolated Xwayland instance and supports AMD, Intel, and Nvidia GPUs
++gamescope-description = Run the game in a dedicated XWayland display with its own resolution and scaling
++gamescope-unavailable = Gamescope is missing. The game launches directly until it is installed.
++gamescope-installing = Installing Gamescope…
++gamescope-install-title = Install Gamescope?
++gamescope-install-description = Pacman will install the optional Gamescope package. You can still launch the game if you skip installation.
+ 
+ discord-rpc = Discord RPC
+ discord-rpc-description = Discord RPC allows you to provide Discord the info that you are currently playing the game to let your friends know
 diff --git a/src/ui/about.rs b/src/ui/about.rs
-index ee15d79..4dc26f6 100644
+index ee15d79..e07b220 100644
 --- a/src/ui/about.rs
 +++ b/src/ui/about.rs
 @@ -8,7 +8,7 @@ lazy_static::lazy_static! {
@@ -83,15 +91,23 @@ index ee15d79..4dc26f6 100644
          format!("{}-dev", crate::APP_VERSION)
      } else {
 -        crate::APP_VERSION.to_string()
-+        format!("{} + Arch enhancements r11", crate::APP_VERSION)
++        format!("{} + Arch enhancements r12", crate::APP_VERSION)
      };
  }
  
 diff --git a/src/ui/preferences/enhancements/mod.rs b/src/ui/preferences/enhancements/mod.rs
-index 3f1afb4..670607c 100644
+index 3f1afb4..0a3f40c 100644
 --- a/src/ui/preferences/enhancements/mod.rs
 +++ b/src/ui/preferences/enhancements/mod.rs
-@@ -22,10 +22,14 @@ pub struct EnhancementsApp {
+@@ -2,6 +2,7 @@ use relm4::prelude::*;
+ use adw::prelude::*;
+ use anime_launcher_sdk::config::ConfigExt;
+ use anime_launcher_sdk::star_rail::config::Config;
++use anime_launcher_sdk::star_rail::game::is_gamescope_available;
+ use anime_launcher_sdk::config::schema_blanks::prelude::*;
+ use anime_launcher_sdk::is_available;
+ use enum_ordinalize::Ordinalize;
+@@ -22,10 +23,16 @@ pub struct EnhancementsApp {
      gamescope: AsyncController<GamescopeApp>,
      game_page: AsyncController<GamePage>,
      sandbox_page: AsyncController<SandboxPage>,
@@ -101,6 +117,8 @@ index 3f1afb4..670607c 100644
 +    system76_scheduler_enabled: bool,
 +    gamemode_available: bool,
 +    system76_scheduler_available: bool,
++    gamescope_available: bool,
++    gamescope_installing: bool,
  }
  
 -#[derive(Debug)]
@@ -108,22 +126,25 @@ index 3f1afb4..670607c 100644
  pub enum EnhancementsAppMsg {
      SetGamescopeParent,
      OpenGamescope,
-@@ -33,6 +37,14 @@ pub enum EnhancementsAppMsg {
+@@ -33,6 +40,17 @@ pub enum EnhancementsAppMsg {
      OpenGameSettingsPage,
      OpenSandboxSettingsPage,
      OpenEnvironmentSettingsPage,
 +    SetGamemode(bool),
 +    SetSystem76Scheduler(bool),
++    SetGamescope(bool),
 +    InstallGamemode,
++    InstallGamescope,
 +    InstallSystem76Scheduler,
 +    RepairSystem76Scheduler,
 +    GamemodeInstallFinished(bool),
++    GamescopeInstallFinished,
 +    System76SchedulerInstallFinished(bool),
 +    System76SchedulerRepairFinished(bool),
  
      Toast {
          title: String,
-@@ -100,13 +110,19 @@ impl SimpleAsyncComponent for EnhancementsApp {
+@@ -100,13 +118,19 @@ impl SimpleAsyncComponent for EnhancementsApp {
  
                  adw::ComboRow {
                      set_title: &tr!("synchronization"),
@@ -146,7 +167,7 @@ index 3f1afb4..670607c 100644
                      ]),
  
                      set_selected: CONFIG.game.wine.sync.ordinal() as u32,
-@@ -114,7 +130,15 @@ impl SimpleAsyncComponent for EnhancementsApp {
+@@ -114,7 +138,15 @@ impl SimpleAsyncComponent for EnhancementsApp {
                      connect_selected_notify => |row| unsafe {
                          if is_ready() {
                              if let Ok(mut config) = Config::get() {
@@ -163,7 +184,7 @@ index 3f1afb4..670607c 100644
  
                                  Config::update(config);
                              }
-@@ -382,24 +406,52 @@ impl SimpleAsyncComponent for EnhancementsApp {
+@@ -382,24 +414,52 @@ impl SimpleAsyncComponent for EnhancementsApp {
                      }
                  },
  
@@ -226,7 +247,41 @@ index 3f1afb4..670607c 100644
                              }
                          }
                      }
-@@ -469,13 +515,26 @@ impl SimpleAsyncComponent for EnhancementsApp {
+@@ -407,9 +467,14 @@ impl SimpleAsyncComponent for EnhancementsApp {
+ 
+                 adw::ActionRow {
+                     set_title: &tr!("gamescope"),
+-                    set_subtitle: &tr!("gamescope-description"),
+-
+-                    set_sensitive: is_available("gamescope"),
++                    #[watch]
++                    set_subtitle: &if model.gamescope_installing {
++                        tr!("gamescope-installing")
++                    } else if model.gamescope_available {
++                        tr!("gamescope-description")
++                    } else {
++                        tr!("gamescope-unavailable")
++                    },
+ 
+                     add_suffix = &gtk::Button {
+                         set_icon_name: "emblem-system-symbolic",
+@@ -425,13 +490,9 @@ impl SimpleAsyncComponent for EnhancementsApp {
+ 
+                         set_active: CONFIG.game.enhancements.gamescope.enabled,
+ 
+-                        connect_state_notify => |switch| {
++                        connect_active_notify[sender] => move |switch| {
+                             if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    config.game.enhancements.gamescope.enabled = switch.is_active();
+-
+-                                    Config::update(config);
+-                                }
++                                sender.input(EnhancementsAppMsg::SetGamescope(switch.is_active()));
+                             }
+                         }
+                     }
+@@ -469,13 +530,28 @@ impl SimpleAsyncComponent for EnhancementsApp {
  
              environment_page: EnvironmentPage::builder()
                  .launch(())
@@ -240,6 +295,8 @@ index 3f1afb4..670607c 100644
 +                && is_system76_scheduler_responsive(),
 +            gamemode_available: is_available("gamemoderun"),
 +            system76_scheduler_available: is_available("system76-scheduler"),
++            gamescope_available: is_gamescope_available(),
++            gamescope_installing: false,
          };
  
          let game_page = model.game_page.widget();
@@ -254,10 +311,52 @@ index 3f1afb4..670607c 100644
          let widgets = view_output!();
  
          if !is_wayland_available() {
-@@ -534,6 +591,142 @@ impl SimpleAsyncComponent for EnhancementsApp {
+@@ -534,6 +610,184 @@ impl SimpleAsyncComponent for EnhancementsApp {
                      .push_subpage(self.environment_page.widget());
              },
  
++            EnhancementsAppMsg::SetGamescope(enabled) => {
++                if let Ok(mut config) = Config::get() {
++                    config.game.enhancements.gamescope.enabled = enabled;
++                    Config::update(config);
++                }
++
++                self.gamescope_available = is_gamescope_available();
++                if enabled && !self.gamescope_available && !self.gamescope_installing {
++                    show_optional_install_dialog(
++                        &tr!("gamescope-install-title"),
++                        &tr!("gamescope-install-description"),
++                        EnhancementsAppMsg::InstallGamescope,
++                        sender.input_sender().clone(),
++                    );
++                }
++            },
++
++            EnhancementsAppMsg::InstallGamescope => {
++                if self.gamescope_installing {
++                    return;
++                }
++                self.gamescope_installing = true;
++                let sender = sender.clone();
++                std::thread::spawn(move || {
++                    run_optional_dependency_helper("gamescope");
++                    sender.input(EnhancementsAppMsg::GamescopeInstallFinished);
++                });
++            },
++
++            EnhancementsAppMsg::GamescopeInstallFinished => {
++                self.gamescope_installing = false;
++                self.gamescope_available = is_gamescope_available();
++                sender.output(PreferencesAppMsg::Toast {
++                    title: if self.gamescope_available {
++                        tr!("optional-dependency-installed")
++                    } else {
++                        tr!("optional-dependency-install-failed")
++                    },
++                    description: None,
++                }).unwrap();
++            },
++
 +            EnhancementsAppMsg::SetGamemode(enabled) => {
 +                if enabled && !is_available("gamemoderun") {
 +                    self.gamemode_enabled = false;
@@ -397,7 +496,7 @@ index 3f1afb4..670607c 100644
              EnhancementsAppMsg::Toast {
                  title,
                  description
-@@ -548,3 +692,77 @@ impl SimpleAsyncComponent for EnhancementsApp {
+@@ -548,3 +802,77 @@ impl SimpleAsyncComponent for EnhancementsApp {
          }
      }
  }

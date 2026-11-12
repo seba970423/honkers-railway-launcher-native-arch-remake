@@ -4,8 +4,9 @@ Native Arch package for upstream Honkers Railway Launcher `1.15.2`, using a sepa
 
 ## Status
 
-- Package revision: `1.15.2 + Arch enhancements r11`
-- Tested on Arch-compatible CachyOS with KDE Plasma and Wayland
+- Package revision: `1.15.2 + Arch enhancements r12`
+- r11 tested on CachyOS with KDE Plasma and Wayland
+- r12 source checks passed. In-game verification is pending.
 - DXVK remains the recommended graphics backend
 - WineD3D support is experimental
 - Existing launcher configuration, Wine prefixes, components, and game files remain compatible
@@ -18,7 +19,8 @@ Native Arch package for upstream Honkers Railway Launcher `1.15.2`, using a sepa
 | GameMode | Optional and disabled by default | Enabling the toggle offers Pacman installation |
 | System76 Scheduler | Optional foreground assignment over D-Bus | Enabling the toggle offers installation and any required repair |
 | WineD3D | Experimental and disabled by default | DXVK remains installed and configured |
-| MangoHud | Optional | Uses OpenGL `--dlsym` injection with WineD3D |
+| MangoHud | Optional | Direct WineD3D launches use OpenGL `--dlsym` injection |
+| Gamescope | Optional and disabled by default | Launches directly if Gamescope or a desktop display is unavailable |
 
 ## Enhancements
 
@@ -30,8 +32,25 @@ Native Arch package for upstream Honkers Railway Launcher `1.15.2`, using a sepa
 - Deferred System76 Scheduler installation treats its expected repair as a separate stage instead of reporting a false installation failure.
 - GameMode installation includes both `gamemode` and `lib32-gamemode`.
 - The WineD3D toggle is located under `General → Components → Wine options` and uses per-launch builtin DLL overrides without removing DXVK.
-- MangoHud automatically selects its OpenGL injection path when WineD3D is enabled.
+- MangoHud automatically selects its OpenGL injection path on direct WineD3D launches.
 - Strict `--fuzz=0` patch application and structural source verification stop incompatible upstream updates.
+
+### Gamescope
+
+Open **Preferences → Enhancements → Performance** and turn on **Gamescope**.
+If the package is missing, the switch offers to install it through Polkit and
+Pacman. Declining keeps the setting saved so it can take effect when Gamescope
+becomes available.
+
+The gear button opens the game and output resolution, scaling, window mode, and
+frame rate settings. Gamescope supplies Wine's XWayland display while it is
+active. The saved **Wine Wayland** setting applies again on direct launches.
+
+For an overlay, enable **MangoHUD** in the Gamescope settings and install the
+`mangohud` package, which supplies `mangoapp` on Arch. If `mangoapp` is missing,
+Gamescope still runs. GameMode and the selected DXVK or WineD3D backend still
+apply to the game. Check `game.log` in the launcher data directory if the
+compositor exits during launch.
 
 ## Privilege boundary
 

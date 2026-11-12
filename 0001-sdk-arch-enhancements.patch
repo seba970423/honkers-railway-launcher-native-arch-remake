@@ -1,16 +1,3 @@
-From f3076b6610d8f3359cf4a5c17b60d05abd344625 Mon Sep 17 00:00:00 2001
-From: Arch Enhancements <noreply@example.invalid>
-Date: Sat, 15 Aug 2026 22:56:20 +0300
-Subject: [PATCH] star-rail: add sync resolution and scheduler integration
-
----
- src/config/schema_blanks/wine/mod.rs          |  10 +-
- src/config/schema_blanks/wine/wine_sync.rs    |  10 +-
- .../config/schema/game/enhancements.rs        |   5 +
- src/games/star_rail/config/schema/game/mod.rs |  18 ++-
- src/games/star_rail/game.rs                   | 111 ++++++++++++++++--
- 5 files changed, 137 insertions(+), 17 deletions(-)
-
 diff --git a/src/config/schema_blanks/wine/mod.rs b/src/config/schema_blanks/wine/mod.rs
 index cf4cc70..db194c6 100644
 --- a/src/config/schema_blanks/wine/mod.rs
@@ -133,12 +120,25 @@ index 4385227..960ade4 100644
              dxvk: value.get("dxvk")
                  .map(Dxvk::from)
 diff --git a/src/games/star_rail/game.rs b/src/games/star_rail/game.rs
-index 0721f93..021691c 100644
+index 0721f93..5103c36 100644
 --- a/src/games/star_rail/game.rs
 +++ b/src/games/star_rail/game.rs
-@@ -12,7 +12,8 @@ use crate::star_rail::config::Config;
+@@ -1,6 +1,8 @@
++use std::ffi::{OsStr, OsString};
+ use std::io::{Read, Write};
++use std::os::unix::fs::PermissionsExt;
+ use std::process::{Command, Stdio};
+-use std::path::PathBuf;
++use std::path::{Path, PathBuf};
+ use std::fs::File;
+ use std::sync::{Arc, Mutex};
+ use std::sync::atomic::{AtomicUsize, Ordering};
+@@ -11,8 +13,11 @@ use crate::config::ConfigExt;
+ use crate::star_rail::config::Config;
  
  use crate::config::schema_blanks::prelude::{
++    Gamescope,
++    HUD,
      WineDrives,
 -    AllowedDrives
 +    AllowedDrives,
@@ -146,7 +146,7 @@ index 0721f93..021691c 100644
  };
  
  use crate::star_rail::consts;
-@@ -32,6 +33,35 @@ struct Folders {
+@@ -32,6 +37,79 @@ struct Folders {
      pub temp: PathBuf
  }
  
@@ -167,6 +167,50 @@ index 0721f93..021691c 100644
 +    wine_supports_ntsync(wine) && File::open("/dev/ntsync").is_ok()
 +}
 +
++fn executable_on_path(name: &str, path: Option<&OsStr>, cwd: &Path) -> bool {
++    let path = path.unwrap_or_else(|| OsStr::new("/usr/local/bin:/usr/bin:/bin"));
++    std::env::split_paths(path).any(|dir| {
++        cwd.join(dir).join(name).metadata().is_ok_and(|metadata| {
++            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
++        })
++    })
++}
++
++/// Check for the optional host package without starting the compositor.
++pub fn is_gamescope_available() -> bool {
++    executable_on_path("gamescope", std::env::var_os("PATH").as_deref(), Path::new("."))
++}
++
++fn gamescope_command(
++    settings: &Gamescope,
++    env: impl Fn(&str) -> Option<OsString>,
++    game_dir: &Path,
++) -> Option<String> {
++    if !settings.enabled {
++        return None;
++    }
++
++    let path = env("PATH");
++    if !executable_on_path("gamescope", path.as_deref(), game_dir) {
++        tracing::warn!("Gamescope is missing; launching directly");
++        return None;
++    }
++    if !["DISPLAY", "WAYLAND_DISPLAY"].iter().any(|key| {
++        env(key).is_some_and(|value| !value.is_empty())
++    }) {
++        tracing::warn!("Gamescope needs a desktop display; launching directly");
++        return None;
++    }
++
++    let mut settings = settings.clone();
++    if settings.options.mangohud && !executable_on_path("mangoapp", path.as_deref(), game_dir) {
++        tracing::warn!("mangoapp is missing; starting Gamescope without the overlay");
++        settings.options.mangohud = false;
++    }
++
++    settings.get_command()
++}
++
 +/// Whether the currently selected Wine build and kernel can use upstream NTSYNC.
 +pub fn is_ntsync_available() -> bool {
 +    let Ok(config) = Config::get() else {
@@ -182,13 +226,44 @@ index 0721f93..021691c 100644
  fn replace_keywords(command: impl ToString, folders: &Folders) -> String {
      command.to_string()
          .replace("%build%", folders.wine.to_str().unwrap())
-@@ -107,9 +137,34 @@ pub fn run() -> anyhow::Result<()> {
+@@ -61,6 +139,12 @@ pub fn run() -> anyhow::Result<()> {
+     };
+ 
+     let features = wine.features(&config.components.path)?.unwrap_or_default();
++    let dxvk_features = if config.game.wine.wined3d {
++        None
++    } else {
++        config.get_selected_dxvk().ok().flatten()
++            .and_then(|dxvk| dxvk.features(&config.components.path).ok().flatten())
++    };
+ 
+     let mut folders = Folders {
+         wine: config.game.wine.builds.join(&wine.name),
+@@ -70,6 +154,17 @@ pub fn run() -> anyhow::Result<()> {
+         temp: config.launcher.temp.clone().unwrap_or(std::env::temp_dir())
+     };
+ 
++    let gamescope = gamescope_command(&config.game.enhancements.gamescope, |key| {
++        if let Some(value) = config.game.environment.get(key) {
++            return Some(OsString::from(value));
++        }
++        dxvk_features.as_ref().and_then(|features| features.env.get(key))
++            .or_else(|| features.env.get(key))
++            .map(|value| OsString::from(replace_keywords(value, &folders)))
++            .or_else(|| std::env::var_os(key))
++    }, &game_path);
++    let gamescope_active = gamescope.is_some();
++
+     // Check telemetry servers (skipped when the user opted out of
+     // automatic telemetry disabling)
+ 
+@@ -107,9 +202,34 @@ pub fn run() -> anyhow::Result<()> {
          bash_command += "gamemoderun ";
      }
  
 +    if config.game.wine.wined3d
-+        && config.game.enhancements.hud == crate::config::schema_blanks::hud::HUD::MangoHUD
-+        && !config.game.enhancements.gamescope.enabled
++        && config.game.enhancements.hud == HUD::MangoHUD
++        && !gamescope_active
 +    {
 +        bash_command += "mangohud --dlsym ";
 +    }
@@ -218,7 +293,17 @@ index 0721f93..021691c 100644
  
      bash_command += &run_command;
      bash_command += " ";
-@@ -200,18 +255,22 @@ pub fn run() -> anyhow::Result<()> {
+@@ -131,7 +251,8 @@ pub fn run() -> anyhow::Result<()> {
+     }
+ 
+     // gamescope <params> -- <command to run>
+-    if let Some(gamescope) = config.game.enhancements.gamescope.get_command() {
++    if let Some(gamescope) = gamescope {
++        tracing::info!("Gamescope enabled for this launch");
+         bash_command = format!("{gamescope} -- {bash_command}");
+     }
+ 
+@@ -200,30 +321,44 @@ pub fn run() -> anyhow::Result<()> {
          command.env(key, replace_keywords(value, &folders));
      }
  
@@ -227,14 +312,11 @@ index 0721f93..021691c 100644
 -        if let Ok(Some(features)) = dxvk.features(&config.components.path) {
 -            for (key, value) in features.env.iter() {
 -                command.env(key, replace_keywords(value, &folders));
+-            }
 +    // Add environment flags for selected DXVK unless WineD3D was explicitly requested.
-+    if !config.game.wine.wined3d {
-+        if let Ok(Some(dxvk)) = config.get_selected_dxvk() {
-+            if let Ok(Some(features)) = dxvk.features(&config.components.path) {
-+                for (key, value) in features.env.iter() {
-+                    command.env(key, replace_keywords(value, &folders));
-+                }
-             }
++    if let Some(features) = dxvk_features {
++        for (key, value) in features.env.iter() {
++            command.env(key, replace_keywords(value, &folders));
          }
      }
  
@@ -242,15 +324,26 @@ index 0721f93..021691c 100644
  
 -    command.envs(config.game.enhancements.hud.get_env_vars(config.game.enhancements.gamescope.enabled));
 +    if !config.game.wine.wined3d {
-+        command.envs(config.game.enhancements.hud.get_env_vars(config.game.enhancements.gamescope.enabled));
++        command.envs(config.game.enhancements.hud.get_env_vars(gamescope_active));
 +    }
      command.envs(config.game.enhancements.fsr.get_env_vars());
  
      command.envs(config.game.wine.sync.get_env_vars());
-@@ -224,6 +283,15 @@ pub fn run() -> anyhow::Result<()> {
+     command.envs(config.game.wine.language.get_env_vars());
+     command.envs(config.game.wine.shared_libraries.get_env_vars(wine_folder));
+ 
+-    if config.game.wine.winewayland {
++    // Gamescope needs the host display and supplies its own DISPLAY to Wine.
++    if config.game.wine.winewayland && !gamescope_active {
+         command.env("DISPLAY", "");
+     }
  
      command.envs(&config.game.environment);
  
++    if gamescope_active {
++        command.env_remove("MANGOHUD");
++    }
++
 +    if config.game.wine.wined3d {
 +        // Keep the installed DXVK version intact, but override it for this launch only.
 +        // Environment overrides take precedence over the native registry overrides DXVK uses.
@@ -263,7 +356,7 @@ index 0721f93..021691c 100644
      #[cfg(feature = "sessions")]
      if let Some(current) = Sessions::get_current()? {
          Sessions::apply(current, &config.game.wine.prefix)?;
-@@ -245,6 +313,34 @@ pub fn run() -> anyhow::Result<()> {
+@@ -245,6 +380,34 @@ pub fn run() -> anyhow::Result<()> {
          .stderr(Stdio::piped())
          .spawn()?;
  
@@ -298,5 +391,15 @@ index 0721f93..021691c 100644
      // Create new game.log file to log all the game output
      let game_output = Arc::new(Mutex::new(
          File::create(consts::launcher_dir()?.join("game.log"))?
--- 
-2.51.1
+@@ -323,7 +486,10 @@ pub fn run() -> anyhow::Result<()> {
+         }));
+     }
+ 
+-    child.wait()?;
++    let status = child.wait()?;
++    if gamescope_active && !status.success() {
++        tracing::warn!("Game process under Gamescope exited with {status}; see game.log");
++    }
+ 
+     // Flush and close the game log file
+     if let Ok(mut file) = game_output.lock() {

@@ -1,8 +1,8 @@
 pkgname=honkers-railway-launcher-native-arch
 pkgver=1.15.2
-pkgrel=11
+pkgrel=12
 _sdkver=1.35.12
-_patchrev=11
+_patchrev=12
 pkgdesc='Honkers Railway Launcher with native Arch enhancements'
 arch=('x86_64')
 url='https://github.com/an-anime-team/the-honkers-railway-launcher'
@@ -15,7 +15,7 @@ depends=('gtk4' 'libadwaita' 'glibc' 'hicolor-icon-theme' 'glib2'
 makedepends=('cargo' 'patch')
 optdepends=('gamemode: temporary game-oriented system optimizations'
             'system76-scheduler: foreground process scheduling over D-Bus'
-            'mangohud: performance overlay'
+            'mangohud: performance overlay, including mangoapp for Gamescope'
             'gamescope: gaming micro-compositor')
 source=(
   "launcher-${pkgver}.tar.gz::https://github.com/an-anime-team/the-honkers-railway-launcher/archive/refs/tags/${pkgver}.tar.gz"
@@ -29,10 +29,10 @@ source=(
 sha256sums=(
   '8bca00ada1224a3e00787c6b88d9cc4b7cce52a51e2a3c9c0bd5eae6101ba86b'
   '38526aefa1b0b75f82c52dcf9b6d8f7d5713357c04399114d744e098275dbfe6'
-  '2e676b210aa552978421dac8fcd2ddfddb25970cb9ec0cbd535ea1f131a444b5'
-  '7f5110312c678a0efe5b1e373a268f6921ab89d52b4a5f24788db2ed61a1ce20'
-  '634cde6fa6ab9f98bbfd6c8537b9aff0328362829e109851f62a3f41767eb0f5'
-  '00bc1c6eb552b0fdf256d9afe09a04f5ba79db68bfb631475657a6169d7a8e6c'
+  '037de79103c74b3db7e555a4412dcba8e10f64773bd545f96f2ab22d7e2f879d'
+  'ade52dd8d51d8b5cf67de3b003ed998c645b38bc812eb284c94d2bbc71c1cc47'
+  'cc1c16047ae0dfc4108d48bc031265bf4fa98add7561fe1188aec872ced5379d'
+  'c6530148229e63cae82ef1adfe2d4a1547f49ec635385df26394d935de5e7580'
   '8ad3b8e8d305c7698dff09d7430de339f74cabb4cea887d0e3056557b6421cea'
 )
 

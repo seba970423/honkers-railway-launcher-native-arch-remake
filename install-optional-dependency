@@ -15,6 +15,9 @@ case $1 in
     gamemode)
         packages=(gamemode lib32-gamemode)
         ;;
+    gamescope)
+        packages=(gamescope)
+        ;;
     system76-scheduler)
         packages=(system76-scheduler)
         ;;
