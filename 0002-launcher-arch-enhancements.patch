@@ -82,8 +82,47 @@ index 2bd5eaa..7f88d16 100644
  
  discord-rpc = Discord RPC
  discord-rpc-description = Discord RPC allows you to provide Discord the info that you are currently playing the game to let your friends know
+diff --git a/assets/locales/en/gamescope.ftl b/assets/locales/en/gamescope.ftl
+index 9f35c92..ea1a03f 100644
+--- a/assets/locales/en/gamescope.ftl
++++ b/assets/locales/en/gamescope.ftl
+@@ -1,5 +1,25 @@
+ game-resolution = Game resolution
+ gamescope-resolution = Gamescope resolution
++gamescope-display = Display
++gamescope-output-resolution = Output resolution
++gamescope-match-output = Match output (default)
++gamescope-default-resolution = Gamescope default
++gamescope-custom-resolution = Custom…
++gamescope-custom-game-resolution = Custom game resolution
++gamescope-custom-output-resolution = Custom output resolution
++gamescope-custom-resolution-format = Enter a size such as 1600x900. Leave one side empty to set just width or height.
++gamescope-invalid-resolution = Enter a valid size, such as 1600x900
++
++gamescope-scaling = Scaling
++gamescope-scaling-mode = Scaling mode
++gamescope-fit = Fit (default)
++gamescope-fill = Fill (crop)
++gamescope-scaling-description = Fit keeps the whole image. Fill crops the edges. Stretch fills the window and can distort the image.
++gamescope-fsr-filter = AMD FSR 1
++gamescope-nearest-filter = Nearest neighbour
++gamescope-sharpness = Sharpness
++gamescope-sharpness-range = 0 is sharpest and 20 is softest. Applies to FSR and NIS.
++gamescope-fps-unlimited = 0 leaves the limit unset
+ 
+ framerate = Framerate
+ framerate-limit = Framerate limit
+@@ -46,7 +66,7 @@ force-grab-cursor = Force grab cursor
+ force-grab-cursor-description = Always use relative mouse mode instead of flipping dependent on cursor visibility. The mouse cursor will correctly be centered in the game
+ 
+ mangohud = MangoHUD
+-mangohud-description = Launch with the mangoapp (mangohud) performance overlay enabled
++mangohud-description = Show the Gamescope performance overlay from the mangohud package
+ 
+ extra-args = Extra arguments
+ extra-args-description = Extra arguments appended to the gamescope
 diff --git a/src/ui/about.rs b/src/ui/about.rs
-index ee15d79..e07b220 100644
+index ee15d79..e88c03a 100644
 --- a/src/ui/about.rs
 +++ b/src/ui/about.rs
 @@ -8,7 +8,7 @@ lazy_static::lazy_static! {
@@ -91,7 +130,7 @@ index ee15d79..e07b220 100644
          format!("{}-dev", crate::APP_VERSION)
      } else {
 -        crate::APP_VERSION.to_string()
-+        format!("{} + Arch enhancements r12", crate::APP_VERSION)
++        format!("{} + Arch enhancements r13", crate::APP_VERSION)
      };
  }
  
@@ -573,6 +612,674 @@ index 3f1afb4..0a3f40c 100644
 +        })
 +    })
 +    .unwrap_or(false)
++}
+diff --git a/src/ui/preferences/gamescope.rs b/src/ui/preferences/gamescope.rs
+index 3041d37..e1f4498 100644
+--- a/src/ui/preferences/gamescope.rs
++++ b/src/ui/preferences/gamescope.rs
+@@ -25,8 +25,25 @@ impl SimpleAsyncComponent for GamescopeApp {
+             // FIXME: doesn't work for any reason
+             set_search_enabled: false,
+ 
++            set_default_width: 620,
++            set_default_height: 680,
++
+             add = &adw::PreferencesPage {
+                 add = &adw::PreferencesGroup {
++                    set_title: &tr!("gamescope-display"),
++
++                    #[local_ref]
++                    game_resolution -> adw::ComboRow,
++
++                    #[local_ref]
++                    custom_game_resolution -> adw::EntryRow,
++
++                    #[local_ref]
++                    output_resolution -> adw::ComboRow,
++
++                    #[local_ref]
++                    custom_output_resolution -> adw::EntryRow,
++
+                     adw::ComboRow {
+                         set_title: &tr!("window-mode"),
+ 
+@@ -38,282 +55,45 @@ impl SimpleAsyncComponent for GamescopeApp {
+                             &tr!("fullscreen")
+                         ]),
+ 
+-                        set_selected: CONFIG.game.enhancements.gamescope.window_mode.ordinal() as u32,
++                        set_selected: settings.window_mode.ordinal() as u32,
+ 
+-                        connect_selected_notify => |row| unsafe {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    config.game.enhancements.gamescope.window_mode = GamescopeWindowMode::from_ordinal_unsafe(row.selected() as i8);
+-
+-                                    Config::update(config);
+-                                }
++                        connect_selected_notify => |row| {
++                            if let Some(mode) = GamescopeWindowMode::from_ordinal(row.selected() as i8) {
++                                save_gamescope(|settings| settings.window_mode = mode);
+                             }
+                         }
+                     }
+                 },
+ 
+                 add = &adw::PreferencesGroup {
+-                    set_title: &tr!("game-resolution"),
+-
+-                    adw::EntryRow {
+-                        set_title: &tr!("width"),
+-                        set_input_purpose: gtk::InputPurpose::Digits,
+-
+-                        set_text: &match CONFIG.game.enhancements.gamescope.game_window.width {
+-                            Some(value) if value > 0 => value.to_string(),
+-                            _ => String::new()
+-                        },
+-
+-                        connect_changed => |row| {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    let value = row.text()
+-                                        .parse::<u64>()
+-                                        .unwrap_or_default();
+-
+-                                    config.game.enhancements.gamescope.game_window.width = if value > 0 {
+-                                        Some(value)
+-                                    } else {
+-                                        None
+-                                    };
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    },
+-
+-                    adw::EntryRow {
+-                        set_title: &tr!("height"),
+-                        set_input_purpose: gtk::InputPurpose::Digits,
++                    set_title: &tr!("gamescope-scaling"),
+ 
+-                        set_text: &match CONFIG.game.enhancements.gamescope.game_window.height {
+-                            Some(value) if value > 0 => value.to_string(),
+-                            _ => String::new()
+-                        },
++                    #[local_ref]
++                    filter -> adw::ComboRow,
+ 
+-                        connect_changed => |row| {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    let value = row.text()
+-                                        .parse::<u64>()
+-                                        .unwrap_or_default();
++                    #[local_ref]
++                    scaling_mode -> adw::ComboRow,
+ 
+-                                    config.game.enhancements.gamescope.game_window.height = if value > 0 {
+-                                        Some(value)
+-                                    } else {
+-                                        None
+-                                    };
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    }
++                    #[local_ref]
++                    sharpness -> adw::SpinRow,
+                 },
+ 
+                 add = &adw::PreferencesGroup {
+-                    set_title: &tr!("gamescope-resolution"),
+-
+-                    adw::EntryRow {
+-                        set_title: &tr!("width"),
+-                        set_input_purpose: gtk::InputPurpose::Digits,
+-
+-                        set_text: &match CONFIG.game.enhancements.gamescope.gamescope_window.width {
+-                            Some(value) if value > 0 => value.to_string(),
+-                            _ => String::new()
+-                        },
+-
+-                        connect_changed => |row| {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    let value = row.text()
+-                                        .parse::<u64>()
+-                                        .unwrap_or_default();
+-
+-                                    config.game.enhancements.gamescope.gamescope_window.width = if value > 0 {
+-                                        Some(value)
+-                                    } else {
+-                                        None
+-                                    };
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    },
+-
+-                    adw::EntryRow {
+-                        set_title: &tr!("height"),
+-                        set_input_purpose: gtk::InputPurpose::Digits,
+-
+-                        set_text: &match CONFIG.game.enhancements.gamescope.gamescope_window.height {
+-                            Some(value) if value > 0 => value.to_string(),
+-                            _ => String::new()
+-                        },
+-
+-                        connect_changed => |row| {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    let value = row.text()
+-                                        .parse::<u64>()
+-                                        .unwrap_or_default();
+-
+-                                    config.game.enhancements.gamescope.gamescope_window.height = if value > 0 {
+-                                        Some(value)
+-                                    } else {
+-                                        None
+-                                    };
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    }
+-                },
+-
+-                add = &adw::PreferencesGroup {
+-                    set_title: &tr!("framerate"),
+-
+-                    adw::EntryRow {
+-                        set_title: &tr!("framerate-limit"),
+-                        set_input_purpose: gtk::InputPurpose::Digits,
+-
+-                        set_text: &match CONFIG.game.enhancements.gamescope.framerate.focused {
+-                            Some(value) if value > 0 => value.to_string(),
+-                            _ => String::new()
+-                        },
+-
+-                        connect_changed => |row| {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    let value = row.text()
+-                                        .parse::<u64>()
+-                                        .unwrap_or_default();
+-
+-                                    config.game.enhancements.gamescope.framerate.focused = if value > 0 {
+-                                        Some(value)
+-                                    } else {
+-                                        None
+-                                    };
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    },
+-
+-                    adw::EntryRow {
+-                        set_title: &tr!("unfocused-framerate-limit"),
+-                        set_input_purpose: gtk::InputPurpose::Digits,
+-
+-                        set_text: &match CONFIG.game.enhancements.gamescope.framerate.unfocused {
+-                            Some(value) if value > 0 => value.to_string(),
+-                            _ => String::new()
+-                        },
+-
+-                        connect_changed => |row| {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    let value = row.text()
+-                                        .parse::<u64>()
+-                                        .unwrap_or_default();
+-
+-                                    config.game.enhancements.gamescope.framerate.unfocused = if value > 0 {
+-                                        Some(value)
+-                                    } else {
+-                                        None
+-                                    };
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    }
+-                },
+-
+-                add = &adw::PreferencesGroup {
+-                    set_title: &tr!("upscaling"),
+-                    set_description: Some(&tr!("upscaling-description")),
+-
+-                    adw::ComboRow {
+-                        set_title: &tr!("upscaler"),
+-                        set_subtitle: &tr!("upscaler-description"),
+-
+-                        #[wrap(Some)]
+-                        set_model = &gtk::StringList::new(&[
+-                            &tr!("none"),
+-                            &tr!("auto"),
+-                            &tr!("integer"),
+-                            &tr!("fit"),
+-                            &tr!("fill"),
+-                            &tr!("stretch")
+-                        ]),
+-
+-                        set_selected: CONFIG.game.enhancements.gamescope.upscaling.upscaler.ordinal() as u32,
+-
+-                        connect_selected_notify => |row| unsafe {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    config.game.enhancements.gamescope.upscaling.upscaler = GamescopeUpscaler::from_ordinal_unsafe(row.selected() as i8);
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    },
+-
+-                    adw::ComboRow {
+-                        set_title: &tr!("upscale-filter"),
+-                        set_subtitle: &tr!("upscale-filter-description"),
+-
+-                        #[wrap(Some)]
+-                        set_model = &gtk::StringList::new(&[
+-                            &tr!("none"),
+-                            &tr!("linear"),
+-                            &tr!("nearest"),
+-                            &tr!("fsr"),
+-                            &tr!("nis"),
+-                            &tr!("pixel")
+-                        ]),
+-
+-                        set_selected: CONFIG.game.enhancements.gamescope.upscaling.filter.ordinal() as u32,
+-
+-                        connect_selected_notify => |row| unsafe {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    config.game.enhancements.gamescope.upscaling.filter = GamescopeUpscaleFilter::from_ordinal_unsafe(row.selected() as i8);
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    },
++                    set_title: &tr!("performance"),
+ 
+-                    adw::ComboRow {
+-                        set_title: &tr!("upscale-sharpness"),
+-                        set_subtitle: &tr!("upscale-sharpness-description"),
++                    #[local_ref]
++                    focused_fps -> adw::SpinRow,
+ 
+-                        #[wrap(Some)]
+-                        set_model = &gtk::StringList::new(&[
+-                            &tr!("none"),
+-                            &tr!("smallest"),
+-                            &tr!("small"),
+-                            &tr!("balanced"),
+-                            &tr!("high"),
+-                            &tr!("highest")
+-                        ]),
+-
+-                        set_selected: CONFIG.game.enhancements.gamescope.upscaling.sharpness.ordinal() as u32,
++                    #[local_ref]
++                    unfocused_fps -> adw::SpinRow,
+ 
+-                        connect_selected_notify => |row| unsafe {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    config.game.enhancements.gamescope.upscaling.sharpness = GamescopeUpscaleSharpness::from_ordinal_unsafe(row.selected() as i8);
++                    adw::SwitchRow {
++                        set_title: &tr!("mangohud"),
++                        set_subtitle: &tr!("mangohud-description"),
++                        set_active: settings.options.mangohud,
+ 
+-                                    Config::update(config);
+-                                }
+-                            }
++                        connect_active_notify => |row| {
++                            save_gamescope(|settings| settings.options.mangohud = row.is_active());
+                         }
+                     }
+                 },
+@@ -389,22 +169,6 @@ impl SimpleAsyncComponent for GamescopeApp {
+                         }
+                     },
+ 
+-                    adw::SwitchRow {
+-                        set_title: &tr!("mangohud"),
+-                        set_subtitle: &tr!("mangohud-description"),
+-
+-                        set_active: CONFIG.game.enhancements.gamescope.options.mangohud,
+-
+-                        connect_active_notify => |switch| {
+-                            if is_ready() {
+-                                if let Ok(mut config) = Config::get() {
+-                                    config.game.enhancements.gamescope.options.mangohud = switch.is_active();
+-
+-                                    Config::update(config);
+-                                }
+-                            }
+-                        }
+-                    }
+                 },
+ 
+                 add = &adw::PreferencesGroup {
+@@ -439,6 +203,47 @@ impl SimpleAsyncComponent for GamescopeApp {
+         tracing::info!("Initializing gamescope settings");
+ 
+         let model = Self;
++        let settings = Config::get()
++            .map(|config| config.game.enhancements.gamescope)
++            .unwrap_or_else(|_| CONFIG.game.enhancements.gamescope.clone());
++
++        let game_rows = resolution_rows(
++            &tr!("game-resolution"),
++            &tr!("gamescope-match-output"),
++            &tr!("gamescope-custom-game-resolution"),
++            settings.game_window,
++            |settings, size| settings.game_window = size,
++        );
++        let output_rows = resolution_rows(
++            &tr!("gamescope-output-resolution"),
++            &tr!("gamescope-default-resolution"),
++            &tr!("gamescope-custom-output-resolution"),
++            settings.gamescope_window,
++            |settings, size| settings.gamescope_window = size,
++        );
++        let game_resolution = &game_rows.0;
++        let custom_game_resolution = &game_rows.1;
++        let output_resolution = &output_rows.0;
++        let custom_output_resolution = &output_rows.1;
++
++        let (filter_row, scaling_mode_row, sharpness_row) = scaling_rows(settings.upscaling);
++        let filter = &filter_row;
++        let scaling_mode = &scaling_mode_row;
++        let sharpness = &sharpness_row;
++
++        let focused_row = fps_row(
++            &tr!("framerate-limit"),
++            settings.framerate.focused,
++            |settings, limit| settings.framerate.focused = limit,
++        );
++        let unfocused_row = fps_row(
++            &tr!("unfocused-framerate-limit"),
++            settings.framerate.unfocused,
++            |settings, limit| settings.framerate.unfocused = limit,
++        );
++        let focused_fps = &focused_row;
++        let unfocused_fps = &unfocused_row;
++
+         let widgets = view_output!();
+ 
+         AsyncComponentParts {
+@@ -447,3 +252,261 @@ impl SimpleAsyncComponent for GamescopeApp {
+         }
+     }
+ }
++
++
++fn save_gamescope(update: impl FnOnce(&mut Gamescope)) {
++    if is_ready() {
++        if let Ok(mut config) = Config::get() {
++            update(&mut config.game.enhancements.gamescope);
++            Config::update(config);
++        }
++    }
++}
++
++const RESOLUTION_PRESETS: &[(u64, u64)] = &[
++    (640, 480), (800, 600), (1024, 768), (1280, 720), (1280, 800), (1280, 1024),
++    (1366, 768), (1440, 900), (1600, 900), (1680, 1050), (1920, 1080), (1920, 1200),
++    (2560, 1080), (2560, 1440), (2560, 1600), (3440, 1440), (3840, 2160),
++    (5120, 1440), (7680, 4320),
++];
++const CUSTOM_RESOLUTION: u32 = RESOLUTION_PRESETS.len() as u32 + 1;
++
++fn resolution_selection(size: GamescopeWindowSize) -> u32 {
++    match (size.width, size.height) {
++        (None, None) => 0,
++        (Some(width), Some(height)) => RESOLUTION_PRESETS
++            .iter()
++            .position(|&preset| preset == (width, height))
++            .map_or(CUSTOM_RESOLUTION, |index| index as u32 + 1),
++        _ => CUSTOM_RESOLUTION,
++    }
++}
++
++fn resolution_text(size: GamescopeWindowSize) -> String {
++    if size.width.is_none() && size.height.is_none() {
++        return String::new();
++    }
++
++    let width = size.width.map(|value| value.to_string()).unwrap_or_default();
++    let height = size.height.map(|value| value.to_string()).unwrap_or_default();
++    format!("{width}x{height}")
++}
++
++fn parse_custom_resolution(text: &str) -> Option<GamescopeWindowSize> {
++    fn dimension(text: &str) -> Option<Option<u64>> {
++        let text = text.trim();
++        if text.is_empty() {
++            return Some(None);
++        }
++
++        let value = text.parse::<u64>().ok().filter(|value| (1..=16384).contains(value))?;
++        Some(Some(value))
++    }
++
++    let (width, height) = text.split_once(['x', 'X', '×'])?;
++    let width = dimension(width)?;
++    let height = dimension(height)?;
++    (width.is_some() || height.is_some()).then_some(GamescopeWindowSize { width, height })
++}
++
++fn resolution_rows(
++    title: &str,
++    default_label: &str,
++    custom_label: &str,
++    initial: GamescopeWindowSize,
++    save: impl Fn(&mut Gamescope, GamescopeWindowSize) + Copy + 'static,
++) -> (adw::ComboRow, adw::EntryRow) {
++    let choices = gtk::StringList::new(&[default_label]);
++    for (width, height) in RESOLUTION_PRESETS {
++        choices.append(&format!("{width}x{height}"));
++    }
++    choices.append(&tr!("gamescope-custom-resolution"));
++
++    let selected = resolution_selection(initial);
++    let combo = adw::ComboRow::new();
++    combo.set_title(title);
++    combo.set_model(Some(&choices));
++    combo.set_enable_search(true);
++    combo.set_selected(selected);
++
++    let custom = adw::EntryRow::new();
++    custom.set_title(custom_label);
++    custom.set_tooltip_text(Some(&tr!("gamescope-custom-resolution-format")));
++    custom.set_text(&resolution_text(initial));
++    custom.set_show_apply_button(true);
++    custom.set_visible(selected == CUSTOM_RESOLUTION);
++
++    let entry = custom.clone();
++    combo.connect_selected_notify(move |row| {
++        let selected = row.selected();
++        entry.set_visible(selected == CUSTOM_RESOLUTION);
++        let size = match selected {
++            0 => Some(GamescopeWindowSize::default()),
++            CUSTOM_RESOLUTION => parse_custom_resolution(&entry.text()),
++            index => RESOLUTION_PRESETS.get((index - 1) as usize)
++                .map(|&(width, height)| GamescopeWindowSize {
++                    width: Some(width),
++                    height: Some(height),
++                }),
++        };
++        if let Some(size) = size {
++            save_gamescope(|settings| save(settings, size));
++        }
++    });
++
++    let label = custom_label.to_string();
++    custom.connect_changed(move |row| {
++        row.remove_css_class("error");
++        row.set_title(&label);
++    });
++    custom.connect_apply(move |row| {
++        if let Some(size) = parse_custom_resolution(&row.text()) {
++            save_gamescope(|settings| save(settings, size));
++        } else {
++            row.add_css_class("error");
++            row.set_title(&tr!("gamescope-invalid-resolution"));
++        }
++    });
++
++    (combo, custom)
++}
++
++fn enum_row<T: PartialEq>(title: &str, choices: &[(T, String)], initial: T) -> adw::ComboRow {
++    let labels: Vec<_> = choices.iter().map(|(_, label)| label.as_str()).collect();
++    let selected = choices.iter().position(|(value, _)| *value == initial).unwrap_or(0);
++    let row = adw::ComboRow::new();
++    row.set_title(title);
++    row.set_model(Some(&gtk::StringList::new(&labels)));
++    row.set_selected(selected as u32);
++    row
++}
++
++fn scaling_rows(initial: GamescopeUpscaling) -> (adw::ComboRow, adw::ComboRow, adw::SpinRow) {
++    use GamescopeUpscaleFilter as Filter;
++    use GamescopeUpscaler as Mode;
++
++    let filters = [
++        (Filter::Linear, tr!("linear")),
++        (Filter::FSR, tr!("gamescope-fsr-filter")),
++        (Filter::NIS, tr!("nis")),
++        (Filter::Integer, tr!("integer")),
++        (Filter::Nearest, tr!("gamescope-nearest-filter")),
++        (Filter::Pixel, tr!("pixel")),
++    ];
++    let mut modes = vec![
++        (Mode::Fit, tr!("gamescope-fit")),
++        (Mode::Fill, tr!("gamescope-fill")),
++        (Mode::Stretch, tr!("stretch")),
++        (Mode::Auto, tr!("auto")),
++    ];
++    if initial.upscaler == Mode::Integer {
++        modes.push((Mode::Integer, tr!("integer")));
++    }
++
++    let filter = enum_row(&tr!("upscale-filter"), &filters, initial.filter);
++    let mode = enum_row(&tr!("gamescope-scaling-mode"), &modes, initial.upscaler);
++    mode.set_subtitle(&tr!("gamescope-scaling-description"));
++    mode.set_sensitive(initial.filter != Filter::Integer);
++
++    let sharpness = adw::SpinRow::with_range(0.0, 20.0, 1.0);
++    sharpness.set_title(&tr!("gamescope-sharpness"));
++    sharpness.set_subtitle(&tr!("gamescope-sharpness-range"));
++    sharpness.set_numeric(true);
++    sharpness.set_value(f64::from(initial.sharpness_level()));
++    sharpness.set_sensitive(initial.filter.supports_sharpness());
++
++    let mode_row = mode.clone();
++    let sharpness_row = sharpness.clone();
++    filter.connect_selected_notify(move |row| {
++        if let Some((filter, _)) = filters.get(row.selected() as usize) {
++            mode_row.set_sensitive(*filter != Filter::Integer);
++            sharpness_row.set_sensitive(filter.supports_sharpness());
++            save_gamescope(|settings| settings.upscaling.filter = *filter);
++        }
++    });
++    mode.connect_selected_notify(move |row| {
++        if let Some((mode, _)) = modes.get(row.selected() as usize) {
++            save_gamescope(|settings| settings.upscaling.upscaler = *mode);
++        }
++    });
++    sharpness.connect_value_notify(|row| {
++        save_gamescope(|settings| settings.upscaling.sharpness_value = Some(row.value() as u8));
++    });
++
++    (filter, mode, sharpness)
++}
++
++fn fps_row(
++    title: &str,
++    initial: Option<u64>,
++    save: impl Fn(&mut Gamescope, Option<u64>) + 'static,
++) -> adw::SpinRow {
++    let value = initial.unwrap_or(0);
++    let row = adw::SpinRow::with_range(0.0, value.max(1000) as f64, 1.0);
++    row.set_title(title);
++    row.set_subtitle(&tr!("gamescope-fps-unlimited"));
++    row.set_numeric(true);
++    row.set_value(value as f64);
++    row.connect_value_notify(move |row| {
++        let value = row.value() as u64;
++        save_gamescope(|settings| save(settings, (value > 0).then_some(value)));
++    });
++    row
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn saved_resolutions_select_the_default_preset_or_custom() {
++        assert_eq!(resolution_selection(GamescopeWindowSize::default()), 0);
++        for (index, &(width, height)) in RESOLUTION_PRESETS.iter().enumerate() {
++            let size = GamescopeWindowSize { width: Some(width), height: Some(height) };
++            assert_eq!(resolution_selection(size), index as u32 + 1);
++        }
++        for text in ["1234x900", "x1080", "1920x"] {
++            let size = parse_custom_resolution(text).unwrap();
++            assert_eq!(resolution_selection(size), CUSTOM_RESOLUTION);
++            assert_eq!(resolution_text(size), text);
++        }
++    }
++
++    #[test]
++    fn custom_resolution_rejects_invalid_dimensions() {
++        for text in ["", "x", "1280", "0x1080", "1920xabc", "16385x1080", "1x2x3"] {
++            assert_eq!(parse_custom_resolution(text), None, "{text}");
++        }
++        assert_eq!(
++            parse_custom_resolution(" 1600 × 900 "),
++            Some(GamescopeWindowSize { width: Some(1600), height: Some(900) }),
++        );
++    }
++
++    #[test]
++    fn integer_filter_uses_nearest_and_preserves_the_saved_scaling_mode() {
++        let mut scaling = GamescopeUpscaling {
++            upscaler: GamescopeUpscaler::Fill,
++            filter: GamescopeUpscaleFilter::Integer,
++            sharpness_value: Some(7),
++            ..Default::default()
++        };
++        assert_eq!(scaling.get_command(), "--scaler integer --filter nearest");
++        scaling.filter = GamescopeUpscaleFilter::FSR;
++        assert_eq!(scaling.get_command(), "--scaler fill --filter fsr --sharpness 7");
++    }
++
++    #[test]
++    fn sharpness_accepts_legacy_presets_and_valid_numeric_levels() {
++        let old = serde_json::json!({"filter": "NIS", "sharpness": "High"});
++        let mut scaling = GamescopeUpscaling::from(&old);
++        assert_eq!(scaling.sharpness_level(), 5);
++        assert_eq!(scaling.get_command(), "--filter nis --sharpness 5");
++        scaling.sharpness_value = Some(0);
++        let saved = serde_json::to_value(scaling).unwrap();
++        assert_eq!(GamescopeUpscaling::from(&saved), scaling);
++
++        let invalid = serde_json::json!({"filter": "NIS", "sharpness": "High", "sharpness_value": 21});
++        assert_eq!(GamescopeUpscaling::from(&invalid).sharpness_level(), 5);
++    }
 +}
 diff --git a/src/ui/preferences/general/components.rs b/src/ui/preferences/general/components.rs
 index 10670a2..dc5ad89 100644

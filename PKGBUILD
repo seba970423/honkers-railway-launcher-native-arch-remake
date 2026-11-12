@@ -1,8 +1,8 @@
 pkgname=honkers-railway-launcher-native-arch
 pkgver=1.15.2
-pkgrel=12
+pkgrel=13
 _sdkver=1.35.12
-_patchrev=12
+_patchrev=13
 pkgdesc='Honkers Railway Launcher with native Arch enhancements'
 arch=('x86_64')
 url='https://github.com/an-anime-team/the-honkers-railway-launcher'
@@ -29,9 +29,9 @@ source=(
 sha256sums=(
   '8bca00ada1224a3e00787c6b88d9cc4b7cce52a51e2a3c9c0bd5eae6101ba86b'
   '38526aefa1b0b75f82c52dcf9b6d8f7d5713357c04399114d744e098275dbfe6'
-  '037de79103c74b3db7e555a4412dcba8e10f64773bd545f96f2ab22d7e2f879d'
-  'ade52dd8d51d8b5cf67de3b003ed998c645b38bc812eb284c94d2bbc71c1cc47'
-  'cc1c16047ae0dfc4108d48bc031265bf4fa98add7561fe1188aec872ced5379d'
+  'aebfe6d08f753a24f3dca184a24e5ea70c047712b8f8ca7c03d835373442dd30'
+  'fc6b21f9593ba201fb170129465a1cf969c0ca877be8b6eea419f4f77dd021c1'
+  '982e21eaf933c6365965ebfa5ab71f41d23d816a543269e856570503d65c8d4e'
   'c6530148229e63cae82ef1adfe2d4a1547f49ec635385df26394d935de5e7580'
   '8ad3b8e8d305c7698dff09d7430de339f74cabb4cea887d0e3056557b6421cea'
 )

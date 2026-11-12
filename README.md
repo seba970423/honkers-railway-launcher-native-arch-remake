@@ -4,9 +4,9 @@ Native Arch package for upstream Honkers Railway Launcher `1.15.2`, using a sepa
 
 ## Status
 
-- Package revision: `1.15.2 + Arch enhancements r12`
+- Package revision: `1.15.2 + Arch enhancements r13`
 - r11 tested on CachyOS with KDE Plasma and Wayland
-- r12 source checks passed. In-game verification is pending.
+- r13 source checks passed. In-game verification is pending.
 - DXVK remains the recommended graphics backend
 - WineD3D support is experimental
 - Existing launcher configuration, Wine prefixes, components, and game files remain compatible
@@ -42,9 +42,20 @@ If the package is missing, the switch offers to install it through Polkit and
 Pacman. Declining keeps the setting saved so it can take effect when Gamescope
 becomes available.
 
-The gear button opens the game and output resolution, scaling, window mode, and
-frame rate settings. Gamescope supplies Wine's XWayland display while it is
-active. The saved **Wine Wayland** setting applies again on direct launches.
+The gear button opens searchable **Game resolution** and **Output resolution**
+presets from 640x480 to 7680x4320. **Match output (default)** uses the output
+size for the game. **Gamescope default** uses Gamescope's default output size.
+Choose **Custom…**, enter a size such as `1600x900`, and click the check mark
+to apply it. An existing custom size opens with its dimensions filled in.
+
+Set a filter such as **AMD FSR 1** or **NIS** and choose **Fit**, **Fill (crop)**,
+or **Stretch**. **Integer** uses nearest-neighbour filtering and temporarily
+overrides the scaling mode. FSR and NIS expose sharpness from 0 (sharpest) to
+20 (softest). Set the focused or unfocused FPS limit to 0 to leave it unset,
+and use **Window Mode** to choose fullscreen or borderless.
+
+Gamescope supplies Wine's XWayland display while it is active. The saved
+**Wine Wayland** setting applies again on direct launches.
 
 For an overlay, enable **MangoHUD** in the Gamescope settings and install the
 `mangohud` package, which supplies `mangoapp` on Arch. If `mangoapp` is missing,

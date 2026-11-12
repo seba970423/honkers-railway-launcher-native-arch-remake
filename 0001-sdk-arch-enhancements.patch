@@ -1,3 +1,98 @@
+diff --git a/src/config/schema_blanks/gamescope/upscaling/filter.rs b/src/config/schema_blanks/gamescope/upscaling/filter.rs
+index ed39932..88cb7a5 100644
+--- a/src/config/schema_blanks/gamescope/upscaling/filter.rs
++++ b/src/config/schema_blanks/gamescope/upscaling/filter.rs
+@@ -12,7 +12,8 @@ pub enum GamescopeUpscaleFilter {
+     Nearest,
+     FSR,
+     NIS,
+-    Pixel
++    Pixel,
++    Integer
+ }
+ 
+ impl GamescopeUpscaleFilter {
+@@ -24,9 +25,14 @@ impl GamescopeUpscaleFilter {
+             Self::Nearest => "--filter nearest",
+             Self::FSR     => "--filter fsr",
+             Self::NIS     => "--filter nis",
+-            Self::Pixel   => "--filter pixel"
++            Self::Pixel   => "--filter pixel",
++            Self::Integer => "--filter nearest"
+         }
+     }
++
++    pub fn supports_sharpness(self) -> bool {
++        matches!(self, Self::FSR | Self::NIS)
++    }
+ }
+ 
+ impl From<&JsonValue> for GamescopeUpscaleFilter {
+diff --git a/src/config/schema_blanks/gamescope/upscaling/mod.rs b/src/config/schema_blanks/gamescope/upscaling/mod.rs
+index 4ea6676..083a2d6 100644
+--- a/src/config/schema_blanks/gamescope/upscaling/mod.rs
++++ b/src/config/schema_blanks/gamescope/upscaling/mod.rs
+@@ -18,19 +18,43 @@ pub struct GamescopeUpscaling {
+     pub filter: GamescopeUpscaleFilter,
+ 
+     /// Upscaling sharpness.
+-    pub sharpness: GamescopeUpscaleSharpness
++    pub sharpness: GamescopeUpscaleSharpness,
++
++    /// An explicit 0–20 sharpness level. Older configurations use the preset above.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub sharpness_value: Option<u8>
+ }
+ 
+ impl GamescopeUpscaling {
++    pub fn sharpness_level(&self) -> u8 {
++        self.sharpness_value.unwrap_or(match self.sharpness {
++            GamescopeUpscaleSharpness::None => 2,
++            GamescopeUpscaleSharpness::Smallest => 20,
++            GamescopeUpscaleSharpness::Small => 15,
++            GamescopeUpscaleSharpness::Balanced => 10,
++            GamescopeUpscaleSharpness::High => 5,
++            GamescopeUpscaleSharpness::Highest => 0,
++        })
++    }
++
+     #[inline]
+     pub fn get_command(&self) -> String {
++        if self.filter == GamescopeUpscaleFilter::Integer {
++            return format!("{} {}", GamescopeUpscaler::Integer.get_flag(), self.filter.get_flag());
++        }
++
++        let sharpness = match self.sharpness_value {
++            Some(level) if self.filter.supports_sharpness() => format!("--sharpness {level}"),
++            Some(_) => String::new(),
++            None => self.sharpness.get_flag().to_string(),
++        };
+         let flags = [
+             self.upscaler.get_flag(),
+             self.filter.get_flag(),
+-            self.sharpness.get_flag()
++            sharpness.as_str(),
+         ];
+ 
+-        flags.join(" ")
++        flags.into_iter().filter(|flag| !flag.is_empty()).collect::<Vec<_>>().join(" ")
+     }
+ }
+ 
+@@ -48,7 +72,12 @@ impl From<&JsonValue> for GamescopeUpscaling {
+ 
+             sharpness: value.get("sharpness")
+                 .map(GamescopeUpscaleSharpness::from)
+-                .unwrap_or_default()
++                .unwrap_or_default(),
++
++            sharpness_value: value.get("sharpness_value")
++                .and_then(JsonValue::as_u64)
++                .filter(|&level| level <= 20)
++                .map(|level| level as u8)
+         }
+     }
+ }
 diff --git a/src/config/schema_blanks/wine/mod.rs b/src/config/schema_blanks/wine/mod.rs
 index cf4cc70..db194c6 100644
 --- a/src/config/schema_blanks/wine/mod.rs
