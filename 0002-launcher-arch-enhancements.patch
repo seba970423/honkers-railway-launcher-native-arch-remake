@@ -614,7 +614,7 @@ index 3f1afb4..0a3f40c 100644
 +    .unwrap_or(false)
 +}
 diff --git a/src/ui/preferences/gamescope.rs b/src/ui/preferences/gamescope.rs
-index 3041d37..e1f4498 100644
+index 3041d37..cf3f3f2 100644
 --- a/src/ui/preferences/gamescope.rs
 +++ b/src/ui/preferences/gamescope.rs
 @@ -25,8 +25,25 @@ impl SimpleAsyncComponent for GamescopeApp {
@@ -648,8 +648,7 @@ index 3041d37..e1f4498 100644
                          ]),
  
 -                        set_selected: CONFIG.game.enhancements.gamescope.window_mode.ordinal() as u32,
-+                        set_selected: settings.window_mode.ordinal() as u32,
- 
+-
 -                        connect_selected_notify => |row| unsafe {
 -                            if is_ready() {
 -                                if let Ok(mut config) = Config::get() {
@@ -657,15 +656,12 @@ index 3041d37..e1f4498 100644
 -
 -                                    Config::update(config);
 -                                }
-+                        connect_selected_notify => |row| {
-+                            if let Some(mode) = GamescopeWindowMode::from_ordinal(row.selected() as i8) {
-+                                save_gamescope(|settings| settings.window_mode = mode);
-                             }
-                         }
-                     }
-                 },
- 
-                 add = &adw::PreferencesGroup {
+-                            }
+-                        }
+-                    }
+-                },
+-
+-                add = &adw::PreferencesGroup {
 -                    set_title: &tr!("game-resolution"),
 -
 -                    adw::EntryRow {
@@ -699,24 +695,19 @@ index 3041d37..e1f4498 100644
 -                    adw::EntryRow {
 -                        set_title: &tr!("height"),
 -                        set_input_purpose: gtk::InputPurpose::Digits,
-+                    set_title: &tr!("gamescope-scaling"),
- 
+-
 -                        set_text: &match CONFIG.game.enhancements.gamescope.game_window.height {
 -                            Some(value) if value > 0 => value.to_string(),
 -                            _ => String::new()
 -                        },
-+                    #[local_ref]
-+                    filter -> adw::ComboRow,
- 
+-
 -                        connect_changed => |row| {
 -                            if is_ready() {
 -                                if let Ok(mut config) = Config::get() {
 -                                    let value = row.text()
 -                                        .parse::<u64>()
 -                                        .unwrap_or_default();
-+                    #[local_ref]
-+                    scaling_mode -> adw::ComboRow,
- 
+-
 -                                    config.game.enhancements.gamescope.game_window.height = if value > 0 {
 -                                        Some(value)
 -                                    } else {
@@ -728,11 +719,9 @@ index 3041d37..e1f4498 100644
 -                            }
 -                        }
 -                    }
-+                    #[local_ref]
-+                    sharpness -> adw::SpinRow,
-                 },
- 
-                 add = &adw::PreferencesGroup {
+-                },
+-
+-                add = &adw::PreferencesGroup {
 -                    set_title: &tr!("gamescope-resolution"),
 -
 -                    adw::EntryRow {
@@ -743,7 +732,8 @@ index 3041d37..e1f4498 100644
 -                            Some(value) if value > 0 => value.to_string(),
 -                            _ => String::new()
 -                        },
--
++                        set_selected: settings.window_mode.ordinal() as u32,
+ 
 -                        connect_changed => |row| {
 -                            if is_ready() {
 -                                if let Ok(mut config) = Config::get() {
@@ -787,12 +777,15 @@ index 3041d37..e1f4498 100644
 -
 -                                    Config::update(config);
 -                                }
--                            }
--                        }
--                    }
--                },
--
--                add = &adw::PreferencesGroup {
++                        connect_selected_notify => |row| {
++                            if let Some(mode) = GamescopeWindowMode::from_ordinal(row.selected() as i8) {
++                                save_gamescope(|settings| settings.window_mode = mode);
+                             }
+                         }
+                     }
+                 },
+ 
+                 add = &adw::PreferencesGroup {
 -                    set_title: &tr!("framerate"),
 -
 -                    adw::EntryRow {
@@ -810,7 +803,8 @@ index 3041d37..e1f4498 100644
 -                                    let value = row.text()
 -                                        .parse::<u64>()
 -                                        .unwrap_or_default();
--
++                    set_title: &tr!("gamescope-scaling"),
+ 
 -                                    config.game.enhancements.gamescope.framerate.focused = if value > 0 {
 -                                        Some(value)
 -                                    } else {
@@ -838,21 +832,27 @@ index 3041d37..e1f4498 100644
 -                                    let value = row.text()
 -                                        .parse::<u64>()
 -                                        .unwrap_or_default();
--
++                    #[local_ref]
++                    filter -> adw::ComboRow,
+ 
 -                                    config.game.enhancements.gamescope.framerate.unfocused = if value > 0 {
 -                                        Some(value)
 -                                    } else {
 -                                        None
 -                                    };
--
++                    #[local_ref]
++                    scaling_mode -> adw::ComboRow,
+ 
 -                                    Config::update(config);
 -                                }
 -                            }
 -                        }
 -                    }
--                },
--
--                add = &adw::PreferencesGroup {
++                    #[local_ref]
++                    sharpness -> adw::SpinRow,
+                 },
+ 
+                 add = &adw::PreferencesGroup {
 -                    set_title: &tr!("upscaling"),
 -                    set_description: Some(&tr!("upscaling-description")),
 -
@@ -869,9 +869,12 @@ index 3041d37..e1f4498 100644
 -                            &tr!("fill"),
 -                            &tr!("stretch")
 -                        ]),
--
++                    set_title: &tr!("performance"),
+ 
 -                        set_selected: CONFIG.game.enhancements.gamescope.upscaling.upscaler.ordinal() as u32,
--
++                    #[local_ref]
++                    focused_fps -> adw::SpinRow,
+ 
 -                        connect_selected_notify => |row| unsafe {
 -                            if is_ready() {
 -                                if let Ok(mut config) = Config::get() {
@@ -909,13 +912,12 @@ index 3041d37..e1f4498 100644
 -                            }
 -                        }
 -                    },
-+                    set_title: &tr!("performance"),
- 
+-
 -                    adw::ComboRow {
 -                        set_title: &tr!("upscale-sharpness"),
 -                        set_subtitle: &tr!("upscale-sharpness-description"),
 +                    #[local_ref]
-+                    focused_fps -> adw::SpinRow,
++                    unfocused_fps -> adw::SpinRow,
  
 -                        #[wrap(Some)]
 -                        set_model = &gtk::StringList::new(&[
@@ -928,9 +930,7 @@ index 3041d37..e1f4498 100644
 -                        ]),
 -
 -                        set_selected: CONFIG.game.enhancements.gamescope.upscaling.sharpness.ordinal() as u32,
-+                    #[local_ref]
-+                    unfocused_fps -> adw::SpinRow,
- 
+-
 -                        connect_selected_notify => |row| unsafe {
 -                            if is_ready() {
 -                                if let Ok(mut config) = Config::get() {
@@ -1019,7 +1019,7 @@ index 3041d37..e1f4498 100644
          let widgets = view_output!();
  
          AsyncComponentParts {
-@@ -447,3 +252,261 @@ impl SimpleAsyncComponent for GamescopeApp {
+@@ -447,3 +252,294 @@ impl SimpleAsyncComponent for GamescopeApp {
          }
      }
  }
@@ -1097,6 +1097,12 @@ index 3041d37..e1f4498 100644
 +    let combo = adw::ComboRow::new();
 +    combo.set_title(title);
 +    combo.set_model(Some(&choices));
++    let label = gtk::PropertyExpression::new(
++        gtk::StringObject::static_type(),
++        gtk::Expression::NONE,
++        "string",
++    );
++    combo.set_expression(Some(label));
 +    combo.set_enable_search(true);
 +    combo.set_selected(selected);
 +
@@ -1252,6 +1258,33 @@ index 3041d37..e1f4498 100644
 +            parse_custom_resolution(" 1600 × 900 "),
 +            Some(GamescopeWindowSize { width: Some(1600), height: Some(900) }),
 +        );
++    }
++
++    #[test]
++    #[ignore = "requires a GTK display"]
++    fn resolution_picker_searches_labels_and_only_shows_custom_when_selected() {
++        adw::init().unwrap();
++        crate::i18n::LANG.get_or_init(|| crate::i18n::get_default_lang().clone());
++        let size = GamescopeWindowSize { width: Some(1920), height: Some(1080) };
++        let (picker, custom) = resolution_rows(
++            "Output resolution",
++            "Gamescope default",
++            "Custom output resolution",
++            size,
++            |_, _| {},
++        );
++        let model = picker.model().unwrap();
++        let item = model.item(picker.selected()).unwrap();
++        let label = picker.expression().unwrap().evaluate_as::<String, _>(Some(&item));
++        assert_eq!(label.as_deref(), Some("1920x1080"));
++        assert!(picker.property::<bool>("enable-search"));
++        assert_eq!(model.n_items(), CUSTOM_RESOLUTION + 1);
++        assert!(!custom.property::<bool>("visible"));
++        picker.set_selected(CUSTOM_RESOLUTION);
++        assert!(custom.property::<bool>("visible"));
++        assert_eq!(custom.text().as_str(), "1920x1080");
++        picker.set_selected(0);
++        assert!(!custom.property::<bool>("visible"));
 +    }
 +
 +    #[test]

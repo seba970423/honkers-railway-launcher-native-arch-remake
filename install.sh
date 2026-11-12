@@ -22,7 +22,7 @@ if [[ ! -f /etc/arch-release ]] || ! command -v pacman >/dev/null; then
     exit 1
 fi
 
-required=(base-devel git rust gtk4 libadwaita gdk-pixbuf2 pango xz bzip2 cairo p7zip wayland libwebp-utils winetricks)
+required=(base-devel git rust gtk4 libadwaita gdk-pixbuf2 pango xz bzip2 cairo p7zip wayland libwebp-utils winetricks protobuf)
 missing=()
 for package in "${required[@]}"; do
     pacman -Q "$package" >/dev/null 2>&1 || missing+=("$package")

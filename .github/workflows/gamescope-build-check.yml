@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Install Arch build dependencies
         shell: bash
-        run: pacman -Syu --noconfirm --needed git rust gtk4 libadwaita openssl curl
+        run: pacman -Syu --noconfirm --needed git rust gtk4 libadwaita openssl curl protobuf xorg-server-xvfb xorg-xauth
       - uses: actions/checkout@v4
       - name: Apply pinned patches and run Gamescope tests
         shell: bash
@@ -41,4 +41,4 @@ jobs:
           done
           prepare
           cd "$srcdir/the-honkers-railway-launcher-$pkgver"
-          cargo test --frozen --all-features ui::preferences::gamescope::tests -- --nocapture
+          xvfb-run -a cargo test --frozen --all-features ui::preferences::gamescope::tests -- --include-ignored --nocapture
